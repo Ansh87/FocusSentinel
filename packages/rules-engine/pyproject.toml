@@ -1,0 +1,18 @@
+[project]
+name = "rules-engine"
+version = "0.1.0"
+description = "FocusSentinel shared rules engine (limits, warnings, restriction sequence)"
+requires-python = ">=3.10"
+dependencies = [
+    "tzdata; sys_platform == 'win32'",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["rules_engine*"]

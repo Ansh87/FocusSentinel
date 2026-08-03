@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "FocusSentinel",
+  "version": "0.1.0",
+  "description": "Healthy digital habits, without constant supervision. Measures active foreground time on configured sites and applies household limits.",
+  "permissions": ["tabs", "idle", "storage", "alarms", "declarativeNetRequest"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/warning-banner.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "FocusSentinel"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "restriction_rules",
+        "enabled": false,
+        "path": "rules/restriction_rules.json"
+      }
+    ]
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["pages/restriction.html"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

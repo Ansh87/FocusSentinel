@@ -1,0 +1,216 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal, Optional
+
+from pydantic import BaseModel, EmailStr, Field
+
+
+# ---- Auth ----
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
+    display_name: str
+    role: Literal["parent", "student"] = "parent"
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    role: str
+
+
+# ---- Families / Students ----
+class FamilyCreate(BaseModel):
+    name: str
+    timezone: str = "UTC"
+
+
+class FamilyOut(BaseModel):
+    id: str
+    name: str
+    timezone: str
+    model_config = {"from_attributes": True}
+
+
+class StudentCreate(BaseModel):
+    family_id: str
+    display_name: str
+    age_range: Literal["under_8", "8_12", "13_15", "16_17", "18_plus"]
+    timezone: str = "UTC"
+
+
+class StudentOut(BaseModel):
+    id: str
+    family_id: str
+    display_name: str
+    age_range: str
+    timezone: str
+    model_config = {"from_attributes": True}
+
+
+# ---- Devices ----
+class DeviceRegisterRequest(BaseModel):
+    student_id: str
+    device_type: Literal["windows", "macos", "android", "ios", "browser_extension"]
+    name: str
+    platform_identifier: Optional[str] = None
+
+
+class DeviceRegisterResponse(BaseModel):
+    device_id: str
+    device_token: str  # plaintext, shown once
+
+
+class DeviceHeartbeat(BaseModel):
+    permissions: dict[str, bool] = {}
+
+
+# ---- Rules ----
+class RuleCreate(BaseModel):
+    student_id: str
+    name: str
+    scope_type: Literal["category", "application", "website", "device"]
+    scope_category_key: Optional[str] = None
+    scope_application_id: Optional[str] = None
+    scope_website_id: Optional[str] = None
+    scope_device_id: Optional[str] = None
+    days_of_week: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4, 5, 6])
+    allowed_start: Optional[str] = None  # "HH:MM"
+    allowed_end: Optional[str] = None
+    daily_limit_minutes: Optional[int] = None
+    warning_one_at_minutes: int
+    warning_two_after_additional_minutes: int = 5
+    block_after_warning_two_seconds: int = 60
+    reset_time: str = "00:00"
+    immediate_enforcement: bool = False
+
+
+class RuleUpdate(BaseModel):
+    name: Optional[str] = None
+    days_of_week: Optional[list[int]] = None
+    allowed_start: Optional[str] = None
+    allowed_end: Optional[str] = None
+    daily_limit_minutes: Optional[int] = None
+    warning_one_at_minutes: Optional[int] = None
+    warning_two_after_additional_minutes: Optional[int] = None
+    block_after_warning_two_seconds: Optional[int] = None
+    active: Optional[bool] = None
+
+
+class RuleOut(BaseModel):
+    id: str
+    student_id: str
+    name: str
+    scope_type: str
+    daily_limit_minutes: Optional[int]
+    warning_one_at_minutes: int
+    active: bool
+    model_config = {"from_attributes": True}
+
+
+# ---- Usage events ----
+class UsageEventIn(BaseModel):
+    identifier: str  # domain, package, process, bundle id
+    category_key: Optional[str] = None
+    started_at: datetime
+    ended_at: datetime
+    active_duration_seconds: int
+    classification_source: Literal["catalog", "manual", "auto_detected"] = "catalog"
+    idempotency_key: str
+
+
+class UsageEventBatchRequest(BaseModel):
+    device_id: str
+    events: list[UsageEventIn]
+
+
+class EvaluationOut(BaseModel):
+    identifier: str
+    level: str
+    message: str
+    minutes_used: float
+    limit_minutes: Optional[float]
+    minutes_remaining: Optional[float]
+    seconds_until_restriction: Optional[int] = None
+
+
+class UsageEventBatchResponse(BaseModel):
+    accepted: int
+    duplicates: int
+    evaluations: list[EvaluationOut]
+
+
+class TodayUsageOut(BaseModel):
+    student_id: str
+    date: str
+    total_seconds_by_category: dict[str, int]
+    active_warnings: list[dict]
+    active_restrictions: list[dict]
+
+
+# ---- Extension requests ----
+class ExtensionRequestCreate(BaseModel):
+    student_id: str
+    restriction_event_id: Optional[str] = None
+    rule_id: Optional[str] = None
+    requested_minutes: Optional[int] = None
+    reason_code: Literal["friends", "special_event", "school_related", "technical_issue", "other"]
+    explanation: Optional[str] = None
+
+
+class ExtensionRequestOut(BaseModel):
+    id: str
+    student_id: str
+    requested_minutes: Optional[int]
+    reason_code: str
+    status: str
+    model_config = {"from_attributes": True}
+
+
+class ExtensionDecision(BaseModel):
+    minutes: Optional[int] = None
+    rest_of_day: bool = False
+
+
+# ---- Notification recipients ----
+class NotificationRecipientCreate(BaseModel):
+    family_id: str
+    name: str
+    relationship: str
+    email: Optional[EmailStr] = None
+    mobile_number: Optional[str] = None
+    preferred_channels: list[str] = Field(default_factory=lambda: ["email"])
+    severity_preference: Literal["all", "restriction_only", "daily_summary_only"] = "all"
+
+
+class NotificationRecipientOut(BaseModel):
+    id: str
+    name: str
+    relationship: str
+    email: Optional[str]
+    verified: bool
+    model_config = {"from_attributes": True}
+
+
+class AuditLogOut(BaseModel):
+    id: str
+    actor_type: str
+    action: str
+    target_type: Optional[str]
+    created_at: datetime
+    model_config = {"from_attributes": True}
+
+
+class DeviceHealthOut(BaseModel):
+    device_id: str
+    device_name: str
+    status: str
+    last_seen_at: Optional[datetime]
+    permissions: dict[str, bool]

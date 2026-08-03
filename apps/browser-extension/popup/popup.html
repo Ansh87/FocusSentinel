@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>FocusSentinel</title>
+  <style>
+    body { width: 300px; font-family: system-ui, sans-serif; padding: 14px; }
+    h1 { font-size: 15px; margin: 0 0 8px; }
+    .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; font-size: 13px; }
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #22c55e; margin-right: 6px; }
+    footer { margin-top: 10px; font-size: 11px; color: #64748b; }
+  </style>
+</head>
+<body>
+  <h1><span class="status-dot"></span>FocusSentinel is measuring active time</h1>
+  <div id="rows"></div>
+  <footer>
+    Only foreground time on activities your family has enabled is measured. No page content,
+    messages, or keystrokes are ever collected.
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>
