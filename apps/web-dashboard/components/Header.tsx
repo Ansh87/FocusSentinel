@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { api, getRole, getToken, homeForRole, setRole } from "../lib/api";
 
 export function Header({
   active,
@@ -12,6 +13,10 @@ export function Header({
   right?: ReactNode;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  // Defaults to "/" (the login page) for logged-out visitors and during
+  // server render; once mounted, a signed-in user's brand link goes back to
+  // their own dashboard/student view instead of bouncing them to login.
+  const [brandHref, setBrandHref] = useState("/");
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -21,10 +26,28 @@ export function Header({
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
+  useEffect(() => {
+    if (!getToken()) return;
+    const role = getRole();
+    if (role) {
+      setBrandHref(homeForRole(role));
+      return;
+    }
+    api
+      .me()
+      .then((u) => {
+        setRole(u.role);
+        setBrandHref(homeForRole(u.role));
+      })
+      .catch(() => {
+        /* non-fatal -- brand link just falls back to "/" */
+      });
+  }, []);
+
   return (
     <header className="site-header">
       <div className="container header-inner">
-        <Link href="/" className="brand" onClick={() => setMenuOpen(false)}>
+        <Link href={brandHref} className="brand" onClick={() => setMenuOpen(false)}>
           <span className="brand-mark">FS</span>
           <span>FocusSentinel</span>
         </Link>

@@ -38,7 +38,7 @@ function ruleDisplayLabel(rule: any) {
 
 export default function StudentPage() {
   const router = useRouter();
-  const [student, setStudent] = useState<{ id: string; display_name: string; family_id: string; is_sibling_manager?: boolean } | null>(null);
+  const [student, setStudent] = useState<{ id: string; display_name: string; family_id: string; is_sibling_manager?: boolean; sibling_manager_until?: string | null } | null>(null);
   const [usage, setUsage] = useState<any | null>(null);
   const [rules, setRules] = useState<any[]>([]);
   const [requests, setRequests] = useState<any[]>([]);
@@ -324,7 +324,10 @@ export default function StudentPage() {
           <div className="card">
             <h2>Manage your siblings</h2>
             <p className="muted" style={{ fontSize: 13, marginTop: -6 }}>
-              Your parent gave you permission to adjust limits and decide time requests for the rest of the family.
+              Your parent gave you permission to adjust limits and decide time requests for the rest of the family
+              {student.sibling_manager_until
+                ? ` until ${new Date(student.sibling_manager_until).toLocaleString()}.`
+                : " — this doesn't expire until they remove it."}
             </p>
             <label htmlFor="manage-target">Sibling</label>
             <select id="manage-target" value={manageTarget || ""} onChange={(e) => setManageTarget(e.target.value)}>

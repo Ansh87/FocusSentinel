@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, datetime
 sys.path.insert(0, "../../packages/rules-engine")
 sys.path.insert(0, "../../packages/activity-classifier")
 os.environ["DATABASE_URL"] = f"sqlite:///{os.path.expanduser('~')}/smoke53.db"
@@ -58,7 +58,7 @@ r = client.post(f"/students/{eldest_id}/login", json={"email": "eldest53@test.co
 assert r.status_code == 200, r.text
 
 r = client.post(f"/students/{eldest_id}/sibling-manager", headers=H)
-assert r.status_code == 200 and r.json() == {"student_id": eldest_id, "is_sibling_manager": True}, r.json()
+assert r.status_code == 200 and r.json()["is_sibling_manager"] is True and r.json()["expires_at"] is None, r.json()
 print("sibling-manager grant: OK")
 
 r = client.get(f"/students/family/{family_id}", headers=H)
@@ -134,6 +134,42 @@ assert r.status_code == 200 and r.json()["is_sibling_manager"] is False, r.text
 r = client.put(f"/rules/{rule_id}", json={"daily_limit_minutes": 20}, headers=EH)
 assert r.status_code == 403, r.text
 print("sibling-manager revoke: OK")
+
+# --- temporary (expiring) grant ---
+r = client.post(f"/students/{eldest_id}/sibling-manager", json={"hours": 24}, headers=H)
+assert r.status_code == 200 and r.json()["is_sibling_manager"] is True and r.json()["expires_at"], r.text
+r = client.get(f"/students/family/{family_id}", headers=H)
+by_id2 = {s["id"]: s for s in r.json()}
+assert by_id2[eldest_id]["sibling_manager_until"], by_id2[eldest_id]
+print("temporary grant: expires_at set: OK")
+
+# still works while unexpired
+r = client.put(f"/rules/{rule_id}", json={"daily_limit_minutes": 33}, headers=EH)
+assert r.status_code == 200, r.text
+
+# now simulate it having expired by backdating the row directly, then confirm
+# access is cut off automatically -- no revoke call needed
+with SessionLocal() as _db:
+    grant = _db.query(models.SiblingManagerGrant).filter_by(family_id=family_id, manager_student_id=eldest_id).first()
+    assert grant is not None
+    grant.expires_at = datetime.datetime.utcnow() - datetime.timedelta(minutes=1)
+    _db.commit()
+
+r = client.put(f"/rules/{rule_id}", json={"daily_limit_minutes": 40}, headers=EH)
+assert r.status_code == 403, r.text
+r = client.get(f"/students/family/{family_id}", headers=H)
+by_id3 = {s["id"]: s for s in r.json()}
+assert by_id3[eldest_id]["is_sibling_manager"] is False, by_id3[eldest_id]
+print("expired grant treated as inactive automatically: OK")
+
+# calling grant again with no hours makes it indefinite again (replaces expiry)
+r = client.post(f"/students/{eldest_id}/sibling-manager", headers=H)
+assert r.status_code == 200 and r.json()["expires_at"] is None, r.text
+r = client.put(f"/rules/{rule_id}", json={"daily_limit_minutes": 41}, headers=EH)
+assert r.status_code == 200, r.text
+r = client.delete(f"/students/{eldest_id}/sibling-manager", headers=H)
+assert r.status_code == 200, r.text
+print("re-granting replaces expiry (indefinite again): OK")
 
 # --- clear activity history ---
 r = client.post("/devices/register", json={"student_id": younger_id, "device_type": "browser_extension", "name": "dev"}, headers=H)

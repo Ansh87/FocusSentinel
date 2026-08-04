@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { api, clearToken, isDemoFamily } from "../../lib/api";
 import { Header } from "../../components/Header";
 
-type Student = { id: string; display_name: string; family_id: string; is_sibling_manager?: boolean };
+type Student = { id: string; display_name: string; family_id: string; is_sibling_manager?: boolean; sibling_manager_until?: string | null };
 type TodayUsage = {
   total_seconds_by_category: Record<string, number>;
   total_seconds_by_rule: Record<string, number>;
@@ -457,6 +457,7 @@ export default function DashboardPage() {
   const [clearHistoryBusy, setClearHistoryBusy] = useState(false);
   const [clearHistoryDone, setClearHistoryDone] = useState(false);
   const [siblingManagerBusy, setSiblingManagerBusy] = useState(false);
+  const [siblingManagerDuration, setSiblingManagerDuration] = useState<Record<string, string>>({});
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -477,7 +478,16 @@ export default function DashboardPage() {
       if (fams.length > 0) {
         const s = await api.listStudents(fams[0].id);
         setStudents(s);
-        if (s.length > 0) setSelectedView((prev) => (prev && s.some((st: Student) => st.id === prev)) || prev === "all" ? prev : s[0].id);
+        // With exactly one kid there's nothing to choose -- go straight to their
+        // usage. With more than one, default to the "All students" chooser so a
+        // parent explicitly picks who they're looking at, rather than silently
+        // landing on whichever student happened to load first.
+        if (s.length > 0) {
+          setSelectedView((prev) => {
+            if (prev === "all" || (prev && s.some((st: Student) => st.id === prev))) return prev;
+            return s.length === 1 ? s[0].id : "all";
+          });
+        }
       } else {
         setStudents([]);
         setSelectedView("");
@@ -555,7 +565,8 @@ export default function DashboardPage() {
       if (student.is_sibling_manager) {
         await api.revokeSiblingManager(student.id);
       } else {
-        await api.grantSiblingManager(student.id);
+        const hoursStr = siblingManagerDuration[student.id] ?? "24";
+        await api.grantSiblingManager(student.id, hoursStr ? Number(hoursStr) : null);
       }
       await loadFamilies();
     } catch (e: any) {
@@ -675,7 +686,7 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    if (selectedView !== "all" || students.length === 0) return;
+    if (students.length === 0) return;
     setAllSummaryLoading(true);
     Promise.all(
       students.map(async (s) => {
@@ -689,7 +700,7 @@ export default function DashboardPage() {
     )
       .then((entries) => setAllSummary(Object.fromEntries(entries)))
       .finally(() => setAllSummaryLoading(false));
-  }, [selectedView, students]);
+  }, [students]);
 
   async function refresh() {
     if (!focusedStudentId) return;
@@ -1004,73 +1015,111 @@ export default function DashboardPage() {
               </p>
             )}
 
-            {selectedView === "all" ? (
-              <div className="card">
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
-                  <h2 style={{ marginBottom: 0 }}>All students</h2>
-                  <button className="secondary" onClick={() => setShowAddStudent((v) => !v)} style={{ fontSize: 13, padding: "6px 12px" }}>
-                    {showAddStudent ? "Cancel" : "+ Add a student"}
+            {/* Always reachable, regardless of which student (if any) is currently
+                focused above -- adding or removing a student, or handing a sibling
+                management access, shouldn't require first landing on the "All
+                students" view. */}
+            <div className="card">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+                <h2 style={{ marginBottom: 0 }}>Manage students</h2>
+                <button className="secondary" onClick={() => setShowAddStudent((v) => !v)} style={{ fontSize: 13, padding: "6px 12px" }}>
+                  {showAddStudent ? "Cancel" : "+ Add a student"}
+                </button>
+              </div>
+              {showAddStudent && (
+                <form onSubmit={handleAddStudent} style={{ margin: "12px 0", padding: 12, background: "var(--accent-soft)", borderRadius: 10 }}>
+                  <label htmlFor="add-student-name">Student's name</label>
+                  <input id="add-student-name" value={addStudentName} onChange={(e) => setAddStudentName(e.target.value)} required />
+                  <label htmlFor="add-student-age">Age range</label>
+                  <select id="add-student-age" value={addStudentAge} onChange={(e) => setAddStudentAge(e.target.value)}>
+                    {AGE_RANGES.map((a) => (
+                      <option key={a.key} value={a.key}>
+                        {a.label}
+                      </option>
+                    ))}
+                  </select>
+                  {addStudentError && <p style={{ color: "#991b1b", fontSize: 13 }}>{addStudentError}</p>}
+                  <button type="submit" disabled={addStudentBusy}>
+                    {addStudentBusy ? "Adding..." : "Add student"}
                   </button>
-                </div>
-                {showAddStudent && (
-                  <form onSubmit={handleAddStudent} style={{ margin: "12px 0", padding: 12, background: "var(--accent-soft)", borderRadius: 10 }}>
-                    <label htmlFor="add-student-name">Student's name</label>
-                    <input id="add-student-name" value={addStudentName} onChange={(e) => setAddStudentName(e.target.value)} required />
-                    <label htmlFor="add-student-age">Age range</label>
-                    <select id="add-student-age" value={addStudentAge} onChange={(e) => setAddStudentAge(e.target.value)}>
-                      {AGE_RANGES.map((a) => (
-                        <option key={a.key} value={a.key}>
-                          {a.label}
-                        </option>
-                      ))}
-                    </select>
-                    {addStudentError && <p style={{ color: "#991b1b", fontSize: 13 }}>{addStudentError}</p>}
-                    <button type="submit" disabled={addStudentBusy}>
-                      {addStudentBusy ? "Adding..." : "Add student"}
-                    </button>
-                  </form>
-                )}
-                {allSummaryLoading && <p className="muted">Loading...</p>}
-                {students.map((s) => (
-                  <div className="row" key={s.id}>
-                    <span>
-                      {s.display_name}
-                      {s.is_sibling_manager && (
-                        <span className="badge none" style={{ marginLeft: 8, fontSize: 11 }}>
-                          Manages siblings
-                        </span>
-                      )}
-                    </span>
-                    <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <span className="muted" style={{ fontSize: 13 }}>
-                        {allSummary[s.id]?.rulesCount ?? 0} rule{(allSummary[s.id]?.rulesCount ?? 0) === 1 ? "" : "s"}
-                        {allSummary[s.id]?.restricted ? " · restricted" : ""}
+                </form>
+              )}
+              {students.length === 0 && <p className="muted">No students yet — add your first one above.</p>}
+              {allSummaryLoading && <p className="muted">Loading...</p>}
+              {students.map((s) => (
+                <div className="row" key={s.id}>
+                  <span>
+                    {s.display_name}
+                    {s.is_sibling_manager && (
+                      <span className="badge none" style={{ marginLeft: 8, fontSize: 11 }}>
+                        Manages siblings{s.sibling_manager_until ? ` until ${new Date(s.sibling_manager_until).toLocaleString()}` : ""}
                       </span>
-                      <button className="secondary" onClick={() => setSelectedView(s.id)} style={{ fontSize: 13, padding: "6px 10px" }}>
-                        View
-                      </button>
-                      {students.length > 1 && (
-                        <button
-                          className="secondary"
-                          disabled={siblingManagerBusy}
-                          onClick={() => handleToggleSiblingManager(s)}
-                          style={{ fontSize: 13, padding: "6px 10px" }}
-                        >
-                          {s.is_sibling_manager ? "Remove manage access" : "Let manage siblings"}
-                        </button>
-                      )}
-                      <button className="danger" onClick={() => setDeleteStudentTarget(s)} style={{ fontSize: 13, padding: "6px 10px" }}>
-                        Delete
-                      </button>
+                    )}
+                  </span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span className="muted" style={{ fontSize: 13 }}>
+                      {allSummary[s.id]?.rulesCount ?? 0} rule{(allSummary[s.id]?.rulesCount ?? 0) === 1 ? "" : "s"}
+                      {allSummary[s.id]?.restricted ? " · restricted" : ""}
                     </span>
-                  </div>
-                ))}
+                    <button className="secondary" onClick={() => setSelectedView(s.id)} style={{ fontSize: 13, padding: "6px 10px" }}>
+                      View
+                    </button>
+                    {students.length > 1 && (
+                      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        {s.is_sibling_manager ? (
+                          <button
+                            className="secondary"
+                            disabled={siblingManagerBusy}
+                            onClick={() => handleToggleSiblingManager(s)}
+                            style={{ fontSize: 13, padding: "6px 10px" }}
+                          >
+                            Remove manage access
+                          </button>
+                        ) : (
+                          <>
+                            <select
+                              value={siblingManagerDuration[s.id] || "24"}
+                              onChange={(e) => setSiblingManagerDuration((prev) => ({ ...prev, [s.id]: e.target.value }))}
+                              style={{ width: "auto", margin: 0, padding: "4px 6px", fontSize: 12 }}
+                            >
+                              <option value="1">1 hour</option>
+                              <option value="24">1 day</option>
+                              <option value="168">1 week</option>
+                              <option value="">Indefinite</option>
+                            </select>
+                            <button
+                              className="secondary"
+                              disabled={siblingManagerBusy}
+                              onClick={() => handleToggleSiblingManager(s)}
+                              style={{ fontSize: 13, padding: "6px 10px" }}
+                            >
+                              Let manage siblings
+                            </button>
+                          </>
+                        )}
+                      </span>
+                    )}
+                    <button className="danger" onClick={() => setDeleteStudentTarget(s)} style={{ fontSize: 13, padding: "6px 10px" }}>
+                      Delete
+                    </button>
+                  </span>
+                </div>
+              ))}
+              {students.length > 1 && (
                 <p className="muted" style={{ fontSize: 12, marginTop: 10, marginBottom: 0 }}>
                   "Let manage siblings" authorizes that student (they need their own sign-in first) to edit screen-time
-                  rules and approve or deny extension requests for the others — handy for letting an eldest sibling help
-                  out. It never gives them account or billing access.
+                  rules and approve or deny extension requests for the others, for the duration you pick — handy for
+                  letting an eldest sibling cover for you temporarily. It never gives them account or billing access.
                 </p>
-              </div>
+              )}
+            </div>
+
+            {selectedView === "all" ? (
+              students.length > 1 && (
+                <p className="muted" style={{ fontSize: 13 }}>
+                  Pick "View" above for any student to see their usage, rules, and requests.
+                </p>
+              )
             ) : (
               <div className="dashboard-grid">
                 <div className="dashboard-col">

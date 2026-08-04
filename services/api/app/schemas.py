@@ -77,12 +77,20 @@ class StudentOut(BaseModel):
     age_range: str
     timezone: str
     is_sibling_manager: bool = False
+    sibling_manager_until: Optional[datetime] = None
     model_config = {"from_attributes": True}
+
+
+class SiblingManagerGrantRequest(BaseModel):
+    # Hours until this grant expires; omit or null for an indefinite grant
+    # (until a parent manually revokes it).
+    hours: Optional[int] = Field(default=None, gt=0, le=8760)
 
 
 class SiblingManagerStatus(BaseModel):
     student_id: str
     is_sibling_manager: bool
+    expires_at: Optional[datetime] = None
 
 
 class UserOut(BaseModel):

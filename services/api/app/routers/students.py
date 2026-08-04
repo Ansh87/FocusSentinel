@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from .. import cascade, models, schemas
@@ -12,14 +13,23 @@ from ..usage_service import seconds_today_for_rule
 router = APIRouter(prefix="/students", tags=["students"])
 
 
+def _active_sibling_grant(db: Session, family_id: str, student_id: str) -> models.SiblingManagerGrant | None:
+    return (
+        db.query(models.SiblingManagerGrant)
+        .filter(
+            models.SiblingManagerGrant.family_id == family_id,
+            models.SiblingManagerGrant.manager_student_id == student_id,
+        )
+        .filter(or_(models.SiblingManagerGrant.expires_at.is_(None), models.SiblingManagerGrant.expires_at > datetime.utcnow()))
+        .first()
+    )
+
+
 def _with_sibling_manager_flag(db: Session, student: models.Student) -> schemas.StudentOut:
     out = schemas.StudentOut.model_validate(student)
-    out.is_sibling_manager = (
-        db.query(models.SiblingManagerGrant)
-        .filter_by(family_id=student.family_id, manager_student_id=student.id)
-        .first()
-        is not None
-    )
+    grant = _active_sibling_grant(db, student.family_id, student.id)
+    out.is_sibling_manager = grant is not None
+    out.sibling_manager_until = grant.expires_at if grant else None
     return out
 
 
@@ -129,31 +139,51 @@ def clear_usage_history(student_id: str, db: Session = Depends(get_db), user: mo
 
 
 @router.post("/{student_id}/sibling-manager", response_model=schemas.SiblingManagerStatus)
-def grant_sibling_manager(student_id: str, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+def grant_sibling_manager(
+    student_id: str,
+    payload: schemas.SiblingManagerGrantRequest | None = None,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(require_parent),
+):
     """Authorizes this student (typically the eldest) to manage screen-time
     rules and decide extension requests for their siblings in the same
     family. Requires the student to already have their own login — there's
-    no way to delegate management to someone who can't sign in."""
+    no way to delegate management to someone who can't sign in. Pass
+    `hours` to make this a temporary grant (e.g. "cover for me for the
+    weekend") that stops applying on its own once it expires — no need to
+    remember to revoke it. Calling this again on an existing grant replaces
+    its expiry, so extending or shortening a grant is the same call."""
     student, family = _student_and_family(db, student_id)
     _require_family_membership(db, user, family.id)
     if not student.user_id:
         raise HTTPException(400, "This student needs their own sign-in before they can manage siblings.")
 
+    hours = payload.hours if payload else None
+    expires_at = datetime.utcnow() + timedelta(hours=hours) if hours else None
+
     existing = db.query(models.SiblingManagerGrant).filter_by(family_id=family.id, manager_student_id=student_id).first()
-    if not existing:
-        db.add(models.SiblingManagerGrant(family_id=family.id, manager_student_id=student_id, granted_by=user.id))
+    if existing:
+        existing.expires_at = expires_at
+        existing.granted_by = user.id
+    else:
         db.add(
-            models.AuditLog(
-                family_id=family.id,
-                actor_user_id=user.id,
-                actor_type="parent",
-                action="sibling_manager.granted",
-                target_type="student",
-                target_id=student_id,
+            models.SiblingManagerGrant(
+                family_id=family.id, manager_student_id=student_id, granted_by=user.id, expires_at=expires_at
             )
         )
-        db.commit()
-    return schemas.SiblingManagerStatus(student_id=student_id, is_sibling_manager=True)
+    db.add(
+        models.AuditLog(
+            family_id=family.id,
+            actor_user_id=user.id,
+            actor_type="parent",
+            action="sibling_manager.granted",
+            target_type="student",
+            target_id=student_id,
+            event_metadata={"hours": hours},
+        )
+    )
+    db.commit()
+    return schemas.SiblingManagerStatus(student_id=student_id, is_sibling_manager=True, expires_at=expires_at)
 
 
 @router.delete("/{student_id}/sibling-manager", response_model=schemas.SiblingManagerStatus)

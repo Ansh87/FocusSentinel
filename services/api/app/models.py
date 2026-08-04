@@ -321,6 +321,10 @@ class SiblingManagerGrant(Base):
     manager_student_id: Mapped[str] = mapped_column(String(36), ForeignKey("students.id"))
     granted_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # Null = indefinite (until a parent manually revokes it). Set = a temporary
+    # grant, e.g. "let the eldest cover for me for the next 24 hours" -- treated
+    # as inactive everywhere it's checked once this passes, no cron job needed.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     __table_args__ = (UniqueConstraint("family_id", "manager_student_id"),)
 
 

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from . import models
@@ -57,7 +60,16 @@ def user_can_manage_student(db: Session, user: models.User, student_id: str) -> 
         return False
     grant = (
         db.query(models.SiblingManagerGrant)
-        .filter_by(family_id=own_student.family_id, manager_student_id=own_student.id)
+        .filter(
+            models.SiblingManagerGrant.family_id == own_student.family_id,
+            models.SiblingManagerGrant.manager_student_id == own_student.id,
+        )
+        .filter(
+            or_(
+                models.SiblingManagerGrant.expires_at.is_(None),
+                models.SiblingManagerGrant.expires_at > datetime.utcnow(),
+            )
+        )
         .first()
     )
     return grant is not None

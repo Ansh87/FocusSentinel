@@ -1,6 +1,6 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
-function getToken(): string | null {
+export function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem("focussentinel_token");
 }
@@ -9,8 +9,25 @@ export function setToken(token: string) {
   window.localStorage.setItem("focussentinel_token", token);
 }
 
+// Stored alongside the token purely so client components (the header's brand
+// link, the login page's already-signed-in redirect) can pick the right
+// landing route without an extra round trip to /auth/me on every render.
+export function setRole(role: string) {
+  window.localStorage.setItem("focussentinel_role", role);
+}
+
+export function getRole(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem("focussentinel_role");
+}
+
+export function homeForRole(role: string | null): string {
+  return role === "student" ? "/student" : "/dashboard";
+}
+
 export function clearToken() {
   window.localStorage.removeItem("focussentinel_token");
+  window.localStorage.removeItem("focussentinel_role");
 }
 
 async function request(path: string, options: RequestInit = {}) {
@@ -43,7 +60,8 @@ export const api = {
   listStudents: (familyId: string) => request(`/students/family/${familyId}`),
   deleteStudent: (studentId: string) => request(`/students/${studentId}`, { method: "DELETE" }),
   clearUsageHistory: (studentId: string) => request(`/students/${studentId}/usage/history`, { method: "DELETE" }),
-  grantSiblingManager: (studentId: string) => request(`/students/${studentId}/sibling-manager`, { method: "POST" }),
+  grantSiblingManager: (studentId: string, hours?: number | null) =>
+    request(`/students/${studentId}/sibling-manager`, { method: "POST", body: JSON.stringify({ hours: hours || null }) }),
   revokeSiblingManager: (studentId: string) => request(`/students/${studentId}/sibling-manager`, { method: "DELETE" }),
   usageToday: (studentId: string) => request(`/students/${studentId}/usage/today`),
   usageWeekly: (studentId: string) => request(`/students/${studentId}/usage/weekly`),

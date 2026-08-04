@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, setToken } from "../lib/api";
+import { api, clearToken, getRole, getToken, homeForRole, setRole, setToken } from "../lib/api";
 import { Header } from "../components/Header";
 
 const DEMO_EMAIL = "parent@focussentinel.demo";
@@ -22,6 +22,31 @@ export default function LoginPage() {
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotBusy, setForgotBusy] = useState(false);
   const [forgotSent, setForgotSent] = useState(false);
+
+  // If there's already a valid session (e.g. someone bookmarked "/", hit
+  // back, or landed here after the brand link used to send signed-in users
+  // to login by mistake), skip the form and go straight to their dashboard.
+  useEffect(() => {
+    const token = getToken();
+    if (!token) return;
+    const role = getRole();
+    if (role) {
+      router.replace(homeForRole(role));
+      return;
+    }
+    // Sessions created before role was cached client-side won't have it yet
+    // -- look it up once rather than guessing (misrouting a student to the
+    // parent dashboard would just bounce them right back via ensure_own_*
+    // checks, but there's no reason to guess when we can ask).
+    api
+      .me()
+      .then((u) => {
+        setRole(u.role);
+        router.replace(homeForRole(u.role));
+      })
+      .catch(() => clearToken());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function switchMode(next: "signin" | "signup" | "forgot") {
     setMode(next);
@@ -49,7 +74,8 @@ export default function LoginPage() {
 
   async function afterAuth(result: { access_token: string; role: string }) {
     setToken(result.access_token);
-    router.push(result.role === "student" ? "/student" : "/dashboard");
+    setRole(result.role);
+    router.push(homeForRole(result.role));
   }
 
   async function handleTryDemo() {
