@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, setToken } from "../lib/api";
+import { Header } from "../components/Header";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -27,9 +28,11 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="container" style={{ maxWidth: 420, paddingTop: 80 }}>
-      <h1>FocusSentinel</h1>
-      <p className="muted">Healthy digital habits, without constant supervision.</p>
+    <>
+      <Header />
+      <div className="container" style={{ maxWidth: 420, paddingTop: 48 }}>
+        <h1>FocusSentinel</h1>
+        <p className="muted">Healthy digital habits, without constant supervision.</p>
       <div className="card">
         <h2>Sign in</h2>
         <form onSubmit={handleLogin}>
@@ -44,6 +47,7 @@ export default function LoginPage() {
           Demo parent account: parent@focussentinel.demo / demo-password-123 (seed the database first — see root README).
         </p>
       </div>
-    </div>
+      </div>
+    </>
   );
 }

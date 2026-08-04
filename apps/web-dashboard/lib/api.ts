@@ -45,6 +45,9 @@ export const api = {
   usageWeekly: (studentId: string) => request(`/students/${studentId}/usage/weekly`),
   createRule: (payload: Record<string, unknown>) =>
     request("/rules", { method: "POST", body: JSON.stringify(payload) }),
+  listRules: (studentId: string) => request(`/rules/student/${studentId}`),
+  updateRule: (id: string, payload: Record<string, unknown>) =>
+    request(`/rules/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   registerDevice: (payload: Record<string, unknown>) =>
     request("/devices/register", { method: "POST", body: JSON.stringify(payload) }),
   createRecipient: (payload: Record<string, unknown>) =>
