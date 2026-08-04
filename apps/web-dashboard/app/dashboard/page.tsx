@@ -64,6 +64,8 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [familiesLoaded, setFamiliesLoaded] = useState(false);
   const [demoBusy, setDemoBusy] = useState(false);
+  const [simSteps, setSimSteps] = useState<any[] | null>(null);
+  const [simBusy, setSimBusy] = useState(false);
 
   const [showNewRule, setShowNewRule] = useState(false);
   const [newCategory, setNewCategory] = useState(CATEGORY_OPTIONS[0].key);
@@ -109,6 +111,7 @@ export default function DashboardPage() {
 
   async function handleResetDemo() {
     setDemoBusy(true);
+    setSimSteps(null);
     try {
       await api.resetDemo();
       await loadFamilies();
@@ -117,6 +120,20 @@ export default function DashboardPage() {
       setError(e.message || "Could not reset demo data.");
     } finally {
       setDemoBusy(false);
+    }
+  }
+
+  async function handleSimulate() {
+    setSimBusy(true);
+    setSimSteps(null);
+    try {
+      const result = await api.simulateActivity();
+      setSimSteps(result.steps || []);
+      await refresh();
+    } catch (e: any) {
+      setError(e.message || "Could not run the simulation.");
+    } finally {
+      setSimBusy(false);
     }
   }
 
@@ -255,11 +272,42 @@ export default function DashboardPage() {
               </span>
               {isDemoFamily(families[0]?.name) && <span className="badge none">Demo · sample data</span>}
               {isDemoFamily(families[0]?.name) && (
-                <button className="secondary" onClick={handleResetDemo} disabled={demoBusy} style={{ marginLeft: "auto" }}>
-                  {demoBusy ? "Resetting..." : "Reset Demo"}
-                </button>
+                <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                  <button className="secondary" onClick={handleSimulate} disabled={simBusy || demoBusy}>
+                    {simBusy ? "Simulating..." : "Simulate activity"}
+                  </button>
+                  <button className="secondary" onClick={handleResetDemo} disabled={demoBusy}>
+                    {demoBusy ? "Resetting..." : "Reset Demo"}
+                  </button>
+                </span>
               )}
             </p>
+
+            {simSteps && (
+              <div className="card" style={{ borderColor: "var(--accent)" }}>
+                <h2>Demo simulation</h2>
+                <p className="muted" style={{ fontSize: 13 }}>
+                  This just ran real usage through the actual rules engine and warning/restriction
+                  pipeline on the demo student's gaming limit — it is not real browser-extension
+                  activity.
+                </p>
+                {simSteps.length === 0 ? (
+                  <p className="muted">Already at the end of the sequence — reset the demo to run it again from the start.</p>
+                ) : (
+                  simSteps.map((s, i) => (
+                    <div className="row" key={i}>
+                      <span className={`badge ${s.level === "restricted" ? "restricted" : s.level === "warning_two" ? "warning_two" : s.level === "warning_one" ? "warning_one" : "none"}`}>
+                        {s.level.replace(/_/g, " ")}
+                      </span>
+                      <span className="muted" style={{ fontSize: 13 }}>{s.message}</span>
+                    </div>
+                  ))
+                )}
+                <p className="muted" style={{ fontSize: 13, marginTop: 8, marginBottom: 0 }}>
+                  A new extension request from Alex should now be waiting below for you to approve or deny.
+                </p>
+              </div>
+            )}
 
             {students.length > 1 && (
               <select value={selectedStudent || ""} onChange={(e) => setSelectedStudent(e.target.value)}>

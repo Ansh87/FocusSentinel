@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
@@ -213,3 +213,95 @@ def reset_demo(db: Session = Depends(get_db), user: models.User = Depends(requir
         _delete_family_cascade(db, existing.id)
     family, student = _create_demo_family(db, user)
     return {"family_id": family.id, "student_id": student.id, "created": True}
+
+
+@router.post("/simulate")
+def simulate_activity(db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    """Drives the *real* rules engine and warning/restriction/extension-request
+    pipeline against the demo family only — never a real family — so the demo
+    walkthrough (usage climbing -> first warning -> final warning ->
+    restricted -> extension requested) is genuine backend behavior, just
+    triggered on demand instead of waiting on real browsing. The frontend is
+    responsible for labeling this clearly as "Demo simulation."
+    """
+    family = _find_demo_family(db, user.id)
+    if not family:
+        raise HTTPException(404, "Load the demo family first.")
+
+    student = db.query(models.Student).filter_by(family_id=family.id).first()
+    device = db.query(models.Device).filter_by(student_id=student.id).first() if student else None
+    rule = db.query(models.ScreenTimeRule).filter_by(family_id=family.id, name="Gaming limit").first()
+    if not student or not device or not rule:
+        raise HTTPException(400, "Demo data is incomplete — reset the demo and try again.")
+
+    games = _get_or_create_category(db, "games", "Games")
+    usage_date = datetime.utcnow().date().isoformat()
+
+    current_total = (
+        db.query(models.DailyUsageTotal)
+        .filter_by(student_id=student.id, usage_date=usage_date, category_id=games.id, application_id=None, website_id=None)
+        .first()
+    )
+    current_seconds = current_total.total_seconds if current_total else 0
+
+    steps = []
+    # Checkpoints chosen relative to this rule's actual thresholds (limit=60,
+    # warning_one=48, warning_two=54) so the sequence reliably passes through
+    # progress -> first warning -> final warning -> restricted.
+    for target_minutes in (35, 49, 55, 62):
+        target_seconds = target_minutes * 60
+        delta = target_seconds - current_seconds
+        if delta <= 0:
+            continue
+        db.add(
+            models.UsageEvent(
+                student_id=student.id,
+                device_id=device.id,
+                website_id=None,
+                identifier="roblox.com",
+                category_id=games.id,
+                started_at=datetime.utcnow(),
+                ended_at=datetime.utcnow(),
+                active_duration_seconds=delta,
+                classification_source="catalog",
+                idempotency_key=f"demo-sim-{uuid.uuid4()}",
+            )
+        )
+        db.flush()
+        upsert_daily_total(db, student.id, usage_date, games.id, None, None, delta)
+        db.commit()
+        current_seconds = target_seconds
+        result = evaluate_and_persist(db, student, device, "roblox.com", games.id, None, current_seconds, usage_date=usage_date)
+        db.commit()
+        steps.append(result)
+        if result["level"] == "restricted":
+            break
+
+    extension_request_created = False
+    already_pending = (
+        db.query(models.ExtensionRequest)
+        .filter_by(student_id=student.id, rule_id=rule.id, status="pending")
+        .first()
+    )
+    if not already_pending:
+        restriction = (
+            db.query(models.RestrictionEvent)
+            .filter_by(student_id=student.id, rule_id=rule.id, active=True)
+            .order_by(models.RestrictionEvent.started_at.desc())
+            .first()
+        )
+        db.add(
+            models.ExtensionRequest(
+                student_id=student.id,
+                restriction_event_id=restriction.id if restriction else None,
+                rule_id=rule.id,
+                requested_minutes=15,
+                reason_code="friends",
+                explanation="Almost done with a round — can I get a few more minutes?",
+                status="pending",
+            )
+        )
+        db.commit()
+        extension_request_created = True
+
+    return {"steps": steps, "extension_request_created": extension_request_created}

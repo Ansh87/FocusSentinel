@@ -63,6 +63,7 @@ export const api = {
   auditLog: (familyId: string) => request(`/audit-log?family_id=${familyId}`),
   loadDemo: () => request("/demo/load", { method: "POST" }),
   resetDemo: () => request("/demo/reset", { method: "POST" }),
+  simulateActivity: () => request("/demo/simulate", { method: "POST" }),
 };
 
 export const DEMO_FAMILY_NAME = "Demo Family (Sample Data)";
