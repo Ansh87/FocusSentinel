@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import or_
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from . import models
@@ -58,21 +59,37 @@ def user_can_manage_student(db: Session, user: models.User, student_id: str) -> 
     target = db.get(models.Student, student_id)
     if not target or target.family_id != own_student.family_id:
         return False
-    grant = (
-        db.query(models.SiblingManagerGrant)
-        .filter(
-            models.SiblingManagerGrant.family_id == own_student.family_id,
-            models.SiblingManagerGrant.manager_student_id == own_student.id,
-        )
-        .filter(
-            or_(
-                models.SiblingManagerGrant.expires_at.is_(None),
-                models.SiblingManagerGrant.expires_at > datetime.utcnow(),
+    return active_sibling_grant(db, own_student.family_id, own_student.id) is not None
+
+
+def active_sibling_grant(db: Session, family_id: str, manager_student_id: str) -> models.SiblingManagerGrant | None:
+    """Wrapped in a try/except because `sibling_manager_grants` is a table
+    added purely via `Base.metadata.create_all` (see models.py) rather than
+    the tracked SQL migration — on a deployment where that hasn't run yet
+    (or a stale connection holds a schema snapshot from before it existed),
+    Postgres aborts the whole transaction on a "relation does not exist"
+    error, and every other query on this same request's session would fail
+    right along with it. Treat that as "no active grant" rather than letting
+    an auxiliary permission lookup take down reads that have nothing to do
+    with sibling management."""
+    try:
+        return (
+            db.query(models.SiblingManagerGrant)
+            .filter(
+                models.SiblingManagerGrant.family_id == family_id,
+                models.SiblingManagerGrant.manager_student_id == manager_student_id,
             )
+            .filter(
+                or_(
+                    models.SiblingManagerGrant.expires_at.is_(None),
+                    models.SiblingManagerGrant.expires_at > datetime.utcnow(),
+                )
+            )
+            .first()
         )
-        .first()
-    )
-    return grant is not None
+    except (OperationalError, ProgrammingError):
+        db.rollback()
+        return None
 
 
 def ensure_can_manage_student(db: Session, user: models.User, student_id: str) -> None:

@@ -1,33 +1,20 @@
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from .. import cascade, models, schemas
 from ..database import get_db
-from ..deps import ensure_own_student_or_parent, get_current_user, require_parent
+from ..deps import active_sibling_grant, ensure_own_student_or_parent, get_current_user, require_parent
 from ..security import hash_password
 from ..usage_service import seconds_today_for_rule
 
 router = APIRouter(prefix="/students", tags=["students"])
 
 
-def _active_sibling_grant(db: Session, family_id: str, student_id: str) -> models.SiblingManagerGrant | None:
-    return (
-        db.query(models.SiblingManagerGrant)
-        .filter(
-            models.SiblingManagerGrant.family_id == family_id,
-            models.SiblingManagerGrant.manager_student_id == student_id,
-        )
-        .filter(or_(models.SiblingManagerGrant.expires_at.is_(None), models.SiblingManagerGrant.expires_at > datetime.utcnow()))
-        .first()
-    )
-
-
 def _with_sibling_manager_flag(db: Session, student: models.Student) -> schemas.StudentOut:
     out = schemas.StudentOut.model_validate(student)
-    grant = _active_sibling_grant(db, student.family_id, student.id)
+    grant = active_sibling_grant(db, student.family_id, student.id)
     out.is_sibling_manager = grant is not None
     out.sibling_manager_until = grant.expires_at if grant else None
     return out
