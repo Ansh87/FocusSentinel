@@ -38,18 +38,51 @@ def require_student(user: models.User = Depends(get_current_user)) -> models.Use
     return user
 
 
+def user_can_manage_student(db: Session, user: models.User, student_id: str) -> bool:
+    """True if `user` may edit rules / decide extension requests for
+    `student_id`: any parent (unchanged, family-membership isn't checked
+    here — matches the rest of this codebase's existing permissiveness for
+    parents), or a student holding an active SiblingManagerGrant for another
+    student in their own family. A sibling manager can't manage themselves
+    through this grant — that's just their own student view."""
+    if user.role in ("parent", "admin"):
+        return True
+    if user.role != "student":
+        return False
+    own_student = db.query(models.Student).filter_by(user_id=user.id).first()
+    if not own_student or own_student.id == student_id:
+        return False
+    target = db.get(models.Student, student_id)
+    if not target or target.family_id != own_student.family_id:
+        return False
+    grant = (
+        db.query(models.SiblingManagerGrant)
+        .filter_by(family_id=own_student.family_id, manager_student_id=own_student.id)
+        .first()
+    )
+    return grant is not None
+
+
+def ensure_can_manage_student(db: Session, user: models.User, student_id: str) -> None:
+    if not user_can_manage_student(db, user, student_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You don't have permission to manage this student")
+
+
 def ensure_own_student_or_parent(db: Session, user: models.User, student_id: str) -> None:
-    """Read-scoping for the new student self-service view: a student-role
-    user may only ever query their own linked Student record. Parent-role
-    users are left exactly as permissive as they already were everywhere
-    else in this codebase (no family-membership check here) — this only
-    closes the new gap a student login would otherwise open, not a general
-    authorization overhaul."""
+    """Read-scoping for the student self-service view: a student-role user
+    may query their own linked Student record, or any student they hold a
+    SiblingManagerGrant over (they need to be able to see a sibling's rules
+    and requests in order to manage them). Parent-role users are left
+    exactly as permissive as they already were everywhere else in this
+    codebase (no family-membership check here)."""
     if user.role != "student":
         return
     own_student = db.query(models.Student).filter_by(user_id=user.id).first()
-    if not own_student or own_student.id != student_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "You can only view your own data")
+    if own_student and own_student.id == student_id:
+        return
+    if user_can_manage_student(db, user, student_id):
+        return
+    raise HTTPException(status.HTTP_403_FORBIDDEN, "You can only view your own data")
 
 
 def get_current_device(

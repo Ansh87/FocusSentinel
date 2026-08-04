@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_db
-from ..deps import ensure_own_student_or_parent, get_current_user, require_parent
+from ..deps import ensure_can_manage_student, ensure_own_student_or_parent, get_current_user
 from ..notifications import enqueue_notification
 
 router = APIRouter(prefix="/extension-requests", tags=["extension-requests"])
@@ -57,15 +57,16 @@ def create_extension_request(payload: schemas.ExtensionRequestCreate, db: Sessio
 
 
 @router.post("/grant", response_model=schemas.ExtensionRequestOut)
-def grant_extension(payload: schemas.ExtensionGrantRequest, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
-    """Lets a parent proactively hand over extra time from the "Allow more
-    time" action on a restriction card, without waiting on the student to
-    have filed a request first. Creates the ExtensionRequest already
-    approved, in one step, so it shows up in history the same way a
-    student-initiated approval would."""
+def grant_extension(payload: schemas.ExtensionGrantRequest, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    """Lets a parent (or an authorized sibling manager) proactively hand over
+    extra time from the "Allow more time" action on a restriction card,
+    without waiting on the student to have filed a request first. Creates
+    the ExtensionRequest already approved, in one step, so it shows up in
+    history the same way a student-initiated approval would."""
     student = db.get(models.Student, payload.student_id)
     if not student:
         raise HTTPException(404, "Student not found")
+    ensure_can_manage_student(db, user, student.id)
 
     restriction = (
         db.query(models.RestrictionEvent)
@@ -93,11 +94,12 @@ def grant_extension(payload: schemas.ExtensionGrantRequest, db: Session = Depend
         restriction.lifted_at = datetime.utcnow()
         restriction.lifted_reason = "extension_approved"
 
+    actor_type = "parent" if user.role in ("parent", "admin") else "sibling_manager"
     db.add(
         models.AuditLog(
             family_id=student.family_id,
             actor_user_id=user.id,
-            actor_type="parent",
+            actor_type=actor_type,
             action="extension_request.granted",
             target_type="extension_request",
             target_id=req.id,
@@ -118,10 +120,11 @@ def grant_extension(payload: schemas.ExtensionGrantRequest, db: Session = Depend
 
 
 @router.post("/{request_id}/approve", response_model=schemas.ExtensionRequestOut)
-def approve_extension_request(request_id: str, decision: schemas.ExtensionDecision, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+def approve_extension_request(request_id: str, decision: schemas.ExtensionDecision, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     req = db.get(models.ExtensionRequest, request_id)
     if not req:
         raise HTTPException(404, "Extension request not found")
+    ensure_can_manage_student(db, user, req.student_id)
     if req.status != "pending":
         raise HTTPException(409, f"Request already {req.status}")
 
@@ -138,12 +141,13 @@ def approve_extension_request(request_id: str, decision: schemas.ExtensionDecisi
             restriction.lifted_at = datetime.utcnow()
             restriction.lifted_reason = "extension_approved"
 
+    actor_type = "parent" if user.role in ("parent", "admin") else "sibling_manager"
     student = db.get(models.Student, req.student_id)
     db.add(
         models.AuditLog(
             family_id=student.family_id if student else None,
             actor_user_id=user.id,
-            actor_type="parent",
+            actor_type=actor_type,
             action="extension_request.approved",
             target_type="extension_request",
             target_id=req.id,
@@ -165,10 +169,11 @@ def approve_extension_request(request_id: str, decision: schemas.ExtensionDecisi
 
 
 @router.post("/{request_id}/deny", response_model=schemas.ExtensionRequestOut)
-def deny_extension_request(request_id: str, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+def deny_extension_request(request_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     req = db.get(models.ExtensionRequest, request_id)
     if not req:
         raise HTTPException(404, "Extension request not found")
+    ensure_can_manage_student(db, user, req.student_id)
     if req.status != "pending":
         raise HTTPException(409, f"Request already {req.status}")
 
@@ -176,12 +181,13 @@ def deny_extension_request(request_id: str, db: Session = Depends(get_db), user:
     req.decided_by = user.id
     req.decided_at = datetime.utcnow()
 
+    actor_type = "parent" if user.role in ("parent", "admin") else "sibling_manager"
     student = db.get(models.Student, req.student_id)
     db.add(
         models.AuditLog(
             family_id=student.family_id if student else None,
             actor_user_id=user.id,
-            actor_type="parent",
+            actor_type=actor_type,
             action="extension_request.denied",
             target_type="extension_request",
             target_id=req.id,

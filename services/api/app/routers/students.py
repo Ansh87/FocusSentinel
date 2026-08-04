@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import models, schemas
+from .. import cascade, models, schemas
 from ..database import get_db
 from ..deps import ensure_own_student_or_parent, get_current_user, require_parent
 from ..security import hash_password
@@ -12,12 +12,23 @@ from ..usage_service import seconds_today_for_rule
 router = APIRouter(prefix="/students", tags=["students"])
 
 
+def _with_sibling_manager_flag(db: Session, student: models.Student) -> schemas.StudentOut:
+    out = schemas.StudentOut.model_validate(student)
+    out.is_sibling_manager = (
+        db.query(models.SiblingManagerGrant)
+        .filter_by(family_id=student.family_id, manager_student_id=student.id)
+        .first()
+        is not None
+    )
+    return out
+
+
 @router.get("/me", response_model=schemas.StudentOut)
 def my_student_profile(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     student = db.query(models.Student).filter_by(user_id=user.id).first()
     if not student:
         raise HTTPException(404, "No student profile is linked to this account.")
-    return student
+    return _with_sibling_manager_flag(db, student)
 
 
 @router.post("", response_model=schemas.StudentOut, status_code=201)
@@ -50,7 +61,8 @@ def create_student(payload: schemas.StudentCreate, db: Session = Depends(get_db)
 
 @router.get("/family/{family_id}", response_model=list[schemas.StudentOut])
 def list_students(family_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
-    return db.query(models.Student).filter_by(family_id=family_id).all()
+    students = db.query(models.Student).filter_by(family_id=family_id).all()
+    return [_with_sibling_manager_flag(db, s) for s in students]
 
 
 def _student_and_family(db: Session, student_id: str) -> tuple[models.Student, models.Family]:
@@ -58,6 +70,110 @@ def _student_and_family(db: Session, student_id: str) -> tuple[models.Student, m
     if not student:
         raise HTTPException(404, "Student not found")
     return student, db.get(models.Family, student.family_id)
+
+
+def _require_family_membership(db: Session, user: models.User, family_id: str) -> None:
+    membership = db.query(models.FamilyMember).filter_by(family_id=family_id, user_id=user.id).first()
+    if not membership:
+        raise HTTPException(403, "Not a member of this family")
+
+
+@router.delete("/{student_id}", status_code=200)
+def delete_student(student_id: str, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    """Removes a student profile and everything under it — rules, devices,
+    usage/warning/restriction history, extension requests, and their own
+    login if they have one. Cannot be undone; the frontend confirms with the
+    parent before calling this."""
+    student, family = _student_and_family(db, student_id)
+    _require_family_membership(db, user, family.id)
+
+    cascade.delete_students(db, [student_id])
+    db.add(
+        models.AuditLog(
+            family_id=family.id,
+            actor_user_id=user.id,
+            actor_type="parent",
+            action="student.deleted",
+            target_type="student",
+            target_id=student_id,
+            event_metadata={"display_name": student.display_name},
+        )
+    )
+    db.commit()
+    return {"status": "student_deleted"}
+
+
+@router.delete("/{student_id}/usage/history")
+def clear_usage_history(student_id: str, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    """Wipes recorded activity (raw usage events and the daily rollups the
+    Activity History page reads) for this student. Leaves the student
+    profile, rules, and devices untouched — this is "clear history," not
+    "remove this kid.\""""
+    student, family = _student_and_family(db, student_id)
+    _require_family_membership(db, user, family.id)
+
+    db.query(models.UsageEvent).filter_by(student_id=student_id).delete(synchronize_session=False)
+    db.query(models.DailyUsageTotal).filter_by(student_id=student_id).delete(synchronize_session=False)
+    db.add(
+        models.AuditLog(
+            family_id=family.id,
+            actor_user_id=user.id,
+            actor_type="parent",
+            action="student.history_cleared",
+            target_type="student",
+            target_id=student_id,
+        )
+    )
+    db.commit()
+    return {"status": "history_cleared"}
+
+
+@router.post("/{student_id}/sibling-manager", response_model=schemas.SiblingManagerStatus)
+def grant_sibling_manager(student_id: str, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    """Authorizes this student (typically the eldest) to manage screen-time
+    rules and decide extension requests for their siblings in the same
+    family. Requires the student to already have their own login — there's
+    no way to delegate management to someone who can't sign in."""
+    student, family = _student_and_family(db, student_id)
+    _require_family_membership(db, user, family.id)
+    if not student.user_id:
+        raise HTTPException(400, "This student needs their own sign-in before they can manage siblings.")
+
+    existing = db.query(models.SiblingManagerGrant).filter_by(family_id=family.id, manager_student_id=student_id).first()
+    if not existing:
+        db.add(models.SiblingManagerGrant(family_id=family.id, manager_student_id=student_id, granted_by=user.id))
+        db.add(
+            models.AuditLog(
+                family_id=family.id,
+                actor_user_id=user.id,
+                actor_type="parent",
+                action="sibling_manager.granted",
+                target_type="student",
+                target_id=student_id,
+            )
+        )
+        db.commit()
+    return schemas.SiblingManagerStatus(student_id=student_id, is_sibling_manager=True)
+
+
+@router.delete("/{student_id}/sibling-manager", response_model=schemas.SiblingManagerStatus)
+def revoke_sibling_manager(student_id: str, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    student, family = _student_and_family(db, student_id)
+    _require_family_membership(db, user, family.id)
+
+    db.query(models.SiblingManagerGrant).filter_by(family_id=family.id, manager_student_id=student_id).delete(synchronize_session=False)
+    db.add(
+        models.AuditLog(
+            family_id=family.id,
+            actor_user_id=user.id,
+            actor_type="parent",
+            action="sibling_manager.revoked",
+            target_type="student",
+            target_id=student_id,
+        )
+    )
+    db.commit()
+    return schemas.SiblingManagerStatus(student_id=student_id, is_sibling_manager=False)
 
 
 @router.post("/{student_id}/login", response_model=schemas.StudentLoginStatus)

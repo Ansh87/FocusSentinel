@@ -76,6 +76,20 @@ class StudentOut(BaseModel):
     display_name: str
     age_range: str
     timezone: str
+    is_sibling_manager: bool = False
+    model_config = {"from_attributes": True}
+
+
+class SiblingManagerStatus(BaseModel):
+    student_id: str
+    is_sibling_manager: bool
+
+
+class UserOut(BaseModel):
+    id: str
+    email: str
+    display_name: str
+    role: str
     model_config = {"from_attributes": True}
 
 

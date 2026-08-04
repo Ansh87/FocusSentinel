@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from .. import models, schemas
+from .. import cascade, models, schemas
 from ..config import settings
 from ..database import get_db
 from ..deps import get_current_user
@@ -50,6 +50,64 @@ def login(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
         refresh_token=create_refresh_token(user.id),
         role=user.role,
     )
+
+
+@router.get("/me", response_model=schemas.UserOut)
+def me(user: models.User = Depends(get_current_user)):
+    return user
+
+
+@router.delete("/account")
+def delete_account(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    """Lets a signed-in user permanently delete their own login. A parent
+    can only do this once every student profile in every family they parent
+    has already been removed — deleting an account is not a shortcut for
+    deleting a family's data, it's the last step after that data is
+    already gone. A student can always delete their own login (it just
+    detaches it from their Student profile; the profile and its history
+    stay, since only a parent can remove that via DELETE /students/{id})."""
+    if user.email == demo.RESERVED_DEMO_EMAIL:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The interactive demo account can't be deleted.")
+
+    if user.role == "student":
+        own_student = db.query(models.Student).filter_by(user_id=user.id).first()
+        if own_student:
+            own_student.user_id = None
+        db.delete(user)
+        db.commit()
+        return {"status": "account_deleted"}
+
+    memberships = db.query(models.FamilyMember).filter_by(user_id=user.id, role="parent").all()
+    family_ids = [m.family_id for m in memberships]
+    remaining_students = (
+        db.query(models.Student).filter(models.Student.family_id.in_(family_ids)).count() if family_ids else 0
+    )
+    if remaining_students > 0:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Remove all student profiles first ({remaining_students} remaining) before deleting your account.",
+        )
+
+    for family_id in family_ids:
+        other_parents = (
+            db.query(models.FamilyMember)
+            .filter(models.FamilyMember.family_id == family_id, models.FamilyMember.user_id != user.id)
+            .count()
+        )
+        if other_parents == 0:
+            cascade.delete_family(db, family_id)
+        else:
+            db.query(models.FamilyMember).filter_by(family_id=family_id, user_id=user.id).delete(synchronize_session=False)
+
+    db.query(models.AuditLog).filter_by(actor_user_id=user.id).update(
+        {models.AuditLog.actor_user_id: None}, synchronize_session=False
+    )
+    db.query(models.ExtensionRequest).filter_by(decided_by=user.id).update(
+        {models.ExtensionRequest.decided_by: None}, synchronize_session=False
+    )
+    db.delete(user)
+    db.commit()
+    return {"status": "account_deleted"}
 
 
 @router.post("/change-password")

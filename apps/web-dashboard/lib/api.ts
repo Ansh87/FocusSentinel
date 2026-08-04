@@ -41,6 +41,10 @@ export const api = {
   createStudent: (family_id: string, display_name: string, age_range: string, timezone: string) =>
     request("/students", { method: "POST", body: JSON.stringify({ family_id, display_name, age_range, timezone }) }),
   listStudents: (familyId: string) => request(`/students/family/${familyId}`),
+  deleteStudent: (studentId: string) => request(`/students/${studentId}`, { method: "DELETE" }),
+  clearUsageHistory: (studentId: string) => request(`/students/${studentId}/usage/history`, { method: "DELETE" }),
+  grantSiblingManager: (studentId: string) => request(`/students/${studentId}/sibling-manager`, { method: "POST" }),
+  revokeSiblingManager: (studentId: string) => request(`/students/${studentId}/sibling-manager`, { method: "DELETE" }),
   usageToday: (studentId: string) => request(`/students/${studentId}/usage/today`),
   usageWeekly: (studentId: string) => request(`/students/${studentId}/usage/weekly`),
   createRule: (payload: Record<string, unknown>) =>
@@ -81,6 +85,8 @@ export const api = {
     request("/auth/request-password-reset", { method: "POST", body: JSON.stringify({ email }) }),
   resetPassword: (token: string, new_password: string) =>
     request("/auth/reset-password", { method: "POST", body: JSON.stringify({ token, new_password }) }),
+  me: () => request("/auth/me"),
+  deleteAccount: () => request("/auth/account", { method: "DELETE" }),
 };
 
 export const DEMO_FAMILY_NAME = "Demo Family (Sample Data)";

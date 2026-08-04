@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_db
-from ..deps import ensure_own_student_or_parent, get_current_user, require_parent
+from ..deps import ensure_can_manage_student, ensure_own_student_or_parent, get_current_user
 
 router = APIRouter(prefix="/rules", tags=["rules"])
 
@@ -51,10 +51,11 @@ def _to_rule_out(db: Session, rule: models.ScreenTimeRule) -> schemas.RuleOut:
 
 
 @router.post("", response_model=schemas.RuleOut, status_code=201)
-def create_rule(payload: schemas.RuleCreate, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+def create_rule(payload: schemas.RuleCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     student = db.get(models.Student, payload.student_id)
     if not student:
         raise HTTPException(404, "Student not found")
+    ensure_can_manage_student(db, user, student.id)
 
     category_id = None
     if payload.scope_category_key:
@@ -97,11 +98,12 @@ def create_rule(payload: schemas.RuleCreate, db: Session = Depends(get_db), user
     db.flush()
     for website in websites:
         db.add(models.RuleWebsite(rule_id=rule.id, website_id=website.id))
+    actor_type = "parent" if user.role in ("parent", "admin") else "sibling_manager"
     db.add(
         models.AuditLog(
             family_id=student.family_id,
             actor_user_id=user.id,
-            actor_type="parent",
+            actor_type=actor_type,
             action="rule.created",
             target_type="screen_time_rule",
             target_id=rule.id,
@@ -118,10 +120,11 @@ def create_rule(payload: schemas.RuleCreate, db: Session = Depends(get_db), user
 
 
 @router.put("/{rule_id}", response_model=schemas.RuleOut)
-def update_rule(rule_id: str, payload: schemas.RuleUpdate, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+def update_rule(rule_id: str, payload: schemas.RuleUpdate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     rule = db.get(models.ScreenTimeRule, rule_id)
     if not rule:
         raise HTTPException(404, "Rule not found")
+    ensure_can_manage_student(db, user, rule.student_id)
 
     fields = payload.model_dump(exclude_unset=True)
     website_ids = fields.pop("website_ids", None)
@@ -132,6 +135,7 @@ def update_rule(rule_id: str, payload: schemas.RuleUpdate, db: Session = Depends
         student = db.get(models.Student, student_id)
         if not student:
             raise HTTPException(404, "Student not found")
+        ensure_can_manage_student(db, user, student.id)
         rule.student_id = student.id
         rule.family_id = student.family_id
 
@@ -170,11 +174,12 @@ def update_rule(rule_id: str, payload: schemas.RuleUpdate, db: Session = Depends
 
     for field, value in fields.items():
         setattr(rule, field, value)
+    actor_type = "parent" if user.role in ("parent", "admin") else "sibling_manager"
     db.add(
         models.AuditLog(
             family_id=rule.family_id,
             actor_user_id=user.id,
-            actor_type="parent",
+            actor_type=actor_type,
             action="rule.updated",
             target_type="screen_time_rule",
             target_id=rule.id,
@@ -187,10 +192,11 @@ def update_rule(rule_id: str, payload: schemas.RuleUpdate, db: Session = Depends
 
 
 @router.delete("/{rule_id}", status_code=204)
-def delete_rule(rule_id: str, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+def delete_rule(rule_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     rule = db.get(models.ScreenTimeRule, rule_id)
     if not rule:
         raise HTTPException(404, "Rule not found")
+    ensure_can_manage_student(db, user, rule.student_id)
 
     db.query(models.RuleWebsite).filter_by(rule_id=rule.id).delete()
     db.query(models.WarningEvent).filter_by(rule_id=rule.id).delete()
@@ -199,11 +205,12 @@ def delete_rule(rule_id: str, db: Session = Depends(get_db), user: models.User =
     # detach them from the rule that no longer exists.
     db.query(models.ExtensionRequest).filter_by(rule_id=rule.id).update({"rule_id": None})
 
+    actor_type = "parent" if user.role in ("parent", "admin") else "sibling_manager"
     db.add(
         models.AuditLog(
             family_id=rule.family_id,
             actor_user_id=user.id,
-            actor_type="parent",
+            actor_type=actor_type,
             action="rule.deleted",
             target_type="screen_time_rule",
             target_id=rule.id,

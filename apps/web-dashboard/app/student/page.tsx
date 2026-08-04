@@ -38,12 +38,21 @@ function ruleDisplayLabel(rule: any) {
 
 export default function StudentPage() {
   const router = useRouter();
-  const [student, setStudent] = useState<{ id: string; display_name: string } | null>(null);
+  const [student, setStudent] = useState<{ id: string; display_name: string; family_id: string; is_sibling_manager?: boolean } | null>(null);
   const [usage, setUsage] = useState<any | null>(null);
   const [rules, setRules] = useState<any[]>([]);
   const [requests, setRequests] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+
+  const [siblings, setSiblings] = useState<{ id: string; display_name: string }[]>([]);
+  const [manageTarget, setManageTarget] = useState<string | null>(null);
+  const [manageRules, setManageRules] = useState<any[]>([]);
+  const [manageRequests, setManageRequests] = useState<any[]>([]);
+  const [manageBusy, setManageBusy] = useState(false);
+  const [manageError, setManageError] = useState<string | null>(null);
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  const [limitDraft, setLimitDraft] = useState("");
 
   const [reasonCode, setReasonCode] = useState(REASON_OPTIONS[0].key);
   const [ruleId, setRuleId] = useState("");
@@ -75,11 +84,77 @@ export default function StudentPage() {
       .then(async (s) => {
         setStudent(s);
         await refresh(s.id);
+        if (s.is_sibling_manager) {
+          const all = await api.listStudents(s.family_id);
+          const others = all.filter((sib: any) => sib.id !== s.id);
+          setSiblings(others);
+          if (others.length > 0) setManageTarget(others[0].id);
+        }
       })
       .catch((e: any) => setError(e.message || "No student profile is linked to this account."))
       .finally(() => setLoaded(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function refreshManageTarget() {
+    if (!manageTarget) return;
+    setManageBusy(true);
+    setManageError(null);
+    try {
+      const [r, reqs] = await Promise.all([api.listRules(manageTarget), api.listExtensionRequests(manageTarget, "pending")]);
+      setManageRules(r);
+      setManageRequests(reqs);
+    } catch (e: any) {
+      setManageError(e.message || "Could not load this sibling's data.");
+    } finally {
+      setManageBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!manageTarget) return;
+    refreshManageTarget();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [manageTarget]);
+
+  async function handleSaveLimit(ruleId: string) {
+    const minutes = Number(limitDraft);
+    if (!minutes || minutes <= 0) return;
+    setManageBusy(true);
+    try {
+      await api.updateRule(ruleId, { daily_limit_minutes: minutes });
+      setEditingRuleId(null);
+      await refreshManageTarget();
+    } catch (e: any) {
+      setManageError(e.message || "Could not update this rule.");
+    } finally {
+      setManageBusy(false);
+    }
+  }
+
+  async function handleManageApprove(id: string, minutes?: number) {
+    setManageBusy(true);
+    try {
+      await api.approveExtension(id, minutes);
+      await refreshManageTarget();
+    } catch (e: any) {
+      setManageError(e.message || "Could not approve this request.");
+    } finally {
+      setManageBusy(false);
+    }
+  }
+
+  async function handleManageDeny(id: string) {
+    setManageBusy(true);
+    try {
+      await api.denyExtension(id);
+      await refreshManageTarget();
+    } catch (e: any) {
+      setManageError(e.message || "Could not deny this request.");
+    } finally {
+      setManageBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!student) return;
@@ -244,6 +319,88 @@ export default function StudentPage() {
             </div>
           ))}
         </div>
+
+        {student?.is_sibling_manager && siblings.length > 0 && (
+          <div className="card">
+            <h2>Manage your siblings</h2>
+            <p className="muted" style={{ fontSize: 13, marginTop: -6 }}>
+              Your parent gave you permission to adjust limits and decide time requests for the rest of the family.
+            </p>
+            <label htmlFor="manage-target">Sibling</label>
+            <select id="manage-target" value={manageTarget || ""} onChange={(e) => setManageTarget(e.target.value)}>
+              {siblings.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.display_name}
+                </option>
+              ))}
+            </select>
+
+            {manageError && <p style={{ color: "#991b1b", fontSize: 13 }}>{manageError}</p>}
+
+            <p style={{ fontSize: 13, fontWeight: 600, margin: "14px 0 4px" }}>Pending requests</p>
+            {manageRequests.length === 0 ? (
+              <p className="muted" style={{ fontSize: 13 }}>Nothing pending.</p>
+            ) : (
+              manageRequests.map((r) => (
+                <div className="row" key={r.id}>
+                  <span style={{ fontSize: 13 }}>
+                    {r.requested_minutes ? `${r.requested_minutes} min` : "Request"} — {r.reason_code.replace(/_/g, " ")}
+                  </span>
+                  <span style={{ display: "flex", gap: 6 }}>
+                    <button style={{ fontSize: 12, padding: "5px 10px" }} disabled={manageBusy} onClick={() => handleManageApprove(r.id, r.requested_minutes || undefined)}>
+                      Approve
+                    </button>
+                    <button className="secondary" style={{ fontSize: 12, padding: "5px 10px" }} disabled={manageBusy} onClick={() => handleManageDeny(r.id)}>
+                      Deny
+                    </button>
+                  </span>
+                </div>
+              ))
+            )}
+
+            <p style={{ fontSize: 13, fontWeight: 600, margin: "14px 0 4px" }}>Limits</p>
+            {manageRules.length === 0 ? (
+              <p className="muted" style={{ fontSize: 13 }}>No rules set for this sibling yet.</p>
+            ) : (
+              manageRules.map((r) => (
+                <div className="row" key={r.id}>
+                  <span style={{ fontSize: 13 }}>{ruleDisplayLabel(r)}</span>
+                  {editingRuleId === r.id ? (
+                    <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input
+                        type="number"
+                        min={1}
+                        value={limitDraft}
+                        onChange={(e) => setLimitDraft(e.target.value)}
+                        style={{ width: 70, margin: 0, padding: "4px 6px" }}
+                      />
+                      <button style={{ fontSize: 12, padding: "5px 10px" }} disabled={manageBusy} onClick={() => handleSaveLimit(r.id)}>
+                        Save
+                      </button>
+                      <button className="secondary" style={{ fontSize: 12, padding: "5px 10px" }} onClick={() => setEditingRuleId(null)}>
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <span className="muted" style={{ fontSize: 13 }}>{r.daily_limit_minutes ?? "—"} min/day</span>
+                      <button
+                        className="secondary"
+                        style={{ fontSize: 12, padding: "5px 10px" }}
+                        onClick={() => {
+                          setEditingRuleId(r.id);
+                          setLimitDraft(String(r.daily_limit_minutes || ""));
+                        }}
+                      >
+                        Edit
+                      </button>
+                    </span>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
     </>
   );

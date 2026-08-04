@@ -308,6 +308,22 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class SiblingManagerGrant(Base):
+    """Lets a parent authorize one student (typically the eldest sibling) to
+    manage screen-time rules and approve/deny extension requests for the
+    other students in the same family — without full parent access (no
+    account/student deletion, no other logins). A brand new table, additive
+    and safe via `Base.metadata.create_all`."""
+
+    __tablename__ = "sibling_manager_grants"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_id)
+    family_id: Mapped[str] = mapped_column(String(36), ForeignKey("families.id"))
+    manager_student_id: Mapped[str] = mapped_column(String(36), ForeignKey("students.id"))
+    granted_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    __table_args__ = (UniqueConstraint("family_id", "manager_student_id"),)
+
+
 class DeviceHealthEvent(Base):
     __tablename__ = "device_health_events"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_id)

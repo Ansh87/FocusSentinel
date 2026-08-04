@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { api, clearToken, isDemoFamily } from "../../lib/api";
 import { Header } from "../../components/Header";
 
-type Student = { id: string; display_name: string; family_id: string };
+type Student = { id: string; display_name: string; family_id: string; is_sibling_manager?: boolean };
 type TodayUsage = {
   total_seconds_by_category: Record<string, number>;
   total_seconds_by_rule: Record<string, number>;
@@ -444,6 +444,20 @@ export default function DashboardPage() {
   const [studentLoginBusy, setStudentLoginBusy] = useState(false);
   const [studentLoginError, setStudentLoginError] = useState<string | null>(null);
 
+  const [parentName, setParentName] = useState<string | null>(null);
+
+  const [showAddStudent, setShowAddStudent] = useState(false);
+  const [addStudentName, setAddStudentName] = useState("");
+  const [addStudentAge, setAddStudentAge] = useState(AGE_RANGES[2].key);
+  const [addStudentBusy, setAddStudentBusy] = useState(false);
+  const [addStudentError, setAddStudentError] = useState<string | null>(null);
+
+  const [deleteStudentTarget, setDeleteStudentTarget] = useState<Student | null>(null);
+  const [deleteStudentBusy, setDeleteStudentBusy] = useState(false);
+  const [clearHistoryBusy, setClearHistoryBusy] = useState(false);
+  const [clearHistoryDone, setClearHistoryDone] = useState(false);
+  const [siblingManagerBusy, setSiblingManagerBusy] = useState(false);
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") {
@@ -477,8 +491,79 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadFamilies();
+    api
+      .me()
+      .then((u) => setParentName(u.display_name))
+      .catch(() => {
+        /* non-fatal -- greeting just won't show a name */
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function handleAddStudent(e: React.FormEvent) {
+    e.preventDefault();
+    if (!addStudentName.trim() || !families[0]?.id) return;
+    setAddStudentBusy(true);
+    setAddStudentError(null);
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      await api.createStudent(families[0].id, addStudentName.trim(), addStudentAge, tz);
+      setAddStudentName("");
+      setShowAddStudent(false);
+      await loadFamilies();
+    } catch (e: any) {
+      setAddStudentError(e.message || "Could not add this student.");
+    } finally {
+      setAddStudentBusy(false);
+    }
+  }
+
+  async function handleDeleteStudent() {
+    if (!deleteStudentTarget) return;
+    setDeleteStudentBusy(true);
+    try {
+      await api.deleteStudent(deleteStudentTarget.id);
+      setDeleteStudentTarget(null);
+      if (selectedView === deleteStudentTarget.id) setSelectedView("");
+      await loadFamilies();
+    } catch (e: any) {
+      setError(e.message || "Could not delete this student.");
+    } finally {
+      setDeleteStudentBusy(false);
+    }
+  }
+
+  async function handleClearHistory() {
+    if (!focusedStudentId) return;
+    if (!window.confirm(`Clear all recorded activity history for ${focusedStudent?.display_name || "this student"}? This can't be undone.`)) return;
+    setClearHistoryBusy(true);
+    setClearHistoryDone(false);
+    try {
+      await api.clearUsageHistory(focusedStudentId);
+      setClearHistoryDone(true);
+      await refresh();
+    } catch (e: any) {
+      setError(e.message || "Could not clear activity history.");
+    } finally {
+      setClearHistoryBusy(false);
+    }
+  }
+
+  async function handleToggleSiblingManager(student: Student) {
+    setSiblingManagerBusy(true);
+    try {
+      if (student.is_sibling_manager) {
+        await api.revokeSiblingManager(student.id);
+      } else {
+        await api.grantSiblingManager(student.id);
+      }
+      await loadFamilies();
+    } catch (e: any) {
+      setError(e.message || "Could not update sibling-manager permission.");
+    } finally {
+      setSiblingManagerBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!families[0]?.id) return;
@@ -825,7 +910,7 @@ export default function DashboardPage() {
         }
       />
       <div className="container-wide">
-        <h1>Family overview</h1>
+        <h1>{parentName ? `Hi ${parentName} — Family overview` : "Family overview"}</h1>
 
         {familiesLoaded && families.length === 0 ? (
           <div className="card">
@@ -897,31 +982,94 @@ export default function DashboardPage() {
                   ))}
                 </select>
                 {focusedStudentId && (
-                  <span className="muted" style={{ fontSize: 13 }}>
-                    Everything below reflects this student.
-                  </span>
+                  <>
+                    <span className="muted" style={{ fontSize: 13 }}>
+                      Everything below reflects this student.
+                    </span>
+                    <button
+                      className="secondary"
+                      style={{ fontSize: 12, padding: "5px 10px", marginLeft: "auto" }}
+                      disabled={clearHistoryBusy}
+                      onClick={handleClearHistory}
+                    >
+                      {clearHistoryBusy ? "Clearing..." : "Clear activity history"}
+                    </button>
+                  </>
                 )}
               </div>
+            )}
+            {clearHistoryDone && (
+              <p className="muted" style={{ fontSize: 13, color: "#166534", marginTop: -8 }}>
+                Activity history cleared.
+              </p>
             )}
 
             {selectedView === "all" ? (
               <div className="card">
-                <h2>All students</h2>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+                  <h2 style={{ marginBottom: 0 }}>All students</h2>
+                  <button className="secondary" onClick={() => setShowAddStudent((v) => !v)} style={{ fontSize: 13, padding: "6px 12px" }}>
+                    {showAddStudent ? "Cancel" : "+ Add a student"}
+                  </button>
+                </div>
+                {showAddStudent && (
+                  <form onSubmit={handleAddStudent} style={{ margin: "12px 0", padding: 12, background: "var(--accent-soft)", borderRadius: 10 }}>
+                    <label htmlFor="add-student-name">Student's name</label>
+                    <input id="add-student-name" value={addStudentName} onChange={(e) => setAddStudentName(e.target.value)} required />
+                    <label htmlFor="add-student-age">Age range</label>
+                    <select id="add-student-age" value={addStudentAge} onChange={(e) => setAddStudentAge(e.target.value)}>
+                      {AGE_RANGES.map((a) => (
+                        <option key={a.key} value={a.key}>
+                          {a.label}
+                        </option>
+                      ))}
+                    </select>
+                    {addStudentError && <p style={{ color: "#991b1b", fontSize: 13 }}>{addStudentError}</p>}
+                    <button type="submit" disabled={addStudentBusy}>
+                      {addStudentBusy ? "Adding..." : "Add student"}
+                    </button>
+                  </form>
+                )}
                 {allSummaryLoading && <p className="muted">Loading...</p>}
                 {students.map((s) => (
                   <div className="row" key={s.id}>
-                    <span>{s.display_name}</span>
-                    <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span>
+                      {s.display_name}
+                      {s.is_sibling_manager && (
+                        <span className="badge none" style={{ marginLeft: 8, fontSize: 11 }}>
+                          Manages siblings
+                        </span>
+                      )}
+                    </span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       <span className="muted" style={{ fontSize: 13 }}>
                         {allSummary[s.id]?.rulesCount ?? 0} rule{(allSummary[s.id]?.rulesCount ?? 0) === 1 ? "" : "s"}
                         {allSummary[s.id]?.restricted ? " · restricted" : ""}
                       </span>
-                      <button className="secondary" onClick={() => setSelectedView(s.id)}>
+                      <button className="secondary" onClick={() => setSelectedView(s.id)} style={{ fontSize: 13, padding: "6px 10px" }}>
                         View
+                      </button>
+                      {students.length > 1 && (
+                        <button
+                          className="secondary"
+                          disabled={siblingManagerBusy}
+                          onClick={() => handleToggleSiblingManager(s)}
+                          style={{ fontSize: 13, padding: "6px 10px" }}
+                        >
+                          {s.is_sibling_manager ? "Remove manage access" : "Let manage siblings"}
+                        </button>
+                      )}
+                      <button className="danger" onClick={() => setDeleteStudentTarget(s)} style={{ fontSize: 13, padding: "6px 10px" }}>
+                        Delete
                       </button>
                     </span>
                   </div>
                 ))}
+                <p className="muted" style={{ fontSize: 12, marginTop: 10, marginBottom: 0 }}>
+                  "Let manage siblings" authorizes that student (they need their own sign-in first) to edit screen-time
+                  rules and approve or deny extension requests for the others — handy for letting an eldest sibling help
+                  out. It never gives them account or billing access.
+                </p>
               </div>
             ) : (
               <div className="dashboard-grid">
@@ -1339,6 +1487,27 @@ export default function DashboardPage() {
             <button className="secondary" style={{ marginTop: 16 }} onClick={() => setTroubleshootDevice(null)}>
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {deleteStudentTarget && (
+        <div role="presentation" className="modal-backdrop" onClick={() => (!deleteStudentBusy ? setDeleteStudentTarget(null) : null)}>
+          <div role="dialog" aria-modal="true" aria-labelledby="delete-student-title" onClick={(e) => e.stopPropagation()} className="card modal-body">
+            <h2 id="delete-student-title">Delete {deleteStudentTarget.display_name}?</h2>
+            <p className="muted" style={{ fontSize: 13 }}>
+              This permanently removes {deleteStudentTarget.display_name}'s profile, screen-time rules, connected
+              devices, activity history, and extension request history. Their sign-in (if they have one) is deleted
+              too. This can't be undone.
+            </p>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="danger" disabled={deleteStudentBusy} onClick={handleDeleteStudent}>
+                {deleteStudentBusy ? "Deleting..." : "Delete permanently"}
+              </button>
+              <button className="secondary" disabled={deleteStudentBusy} onClick={() => setDeleteStudentTarget(null)}>
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}

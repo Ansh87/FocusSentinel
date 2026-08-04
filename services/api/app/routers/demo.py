@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import models, schemas
+from .. import cascade, models, schemas
 from ..database import get_db
 from ..deps import require_parent
 from ..security import generate_device_token
@@ -48,35 +48,11 @@ def _find_demo_family(db: Session, user_id: str):
 
 
 def _delete_family_cascade(db: Session, family_id: str) -> None:
-    """Deletes a family and everything under it, in FK-safe order. Only ever
-    called on a family we've verified is the caller's own demo family."""
-    student_ids = [s.id for s in db.query(models.Student).filter_by(family_id=family_id).all()]
-    device_ids = (
-        [d.id for d in db.query(models.Device).filter(models.Device.student_id.in_(student_ids)).all()]
-        if student_ids
-        else []
-    )
-
-    if device_ids:
-        db.query(models.DeviceHealthEvent).filter(models.DeviceHealthEvent.device_id.in_(device_ids)).delete(synchronize_session=False)
-        db.query(models.DevicePermission).filter(models.DevicePermission.device_id.in_(device_ids)).delete(synchronize_session=False)
-    if student_ids:
-        db.query(models.WarningEvent).filter(models.WarningEvent.student_id.in_(student_ids)).delete(synchronize_session=False)
-        db.query(models.RestrictionEvent).filter(models.RestrictionEvent.student_id.in_(student_ids)).delete(synchronize_session=False)
-        db.query(models.ExtensionRequest).filter(models.ExtensionRequest.student_id.in_(student_ids)).delete(synchronize_session=False)
-        db.query(models.UsageEvent).filter(models.UsageEvent.student_id.in_(student_ids)).delete(synchronize_session=False)
-        db.query(models.DailyUsageTotal).filter(models.DailyUsageTotal.student_id.in_(student_ids)).delete(synchronize_session=False)
-    db.query(models.ScreenTimeRule).filter_by(family_id=family_id).delete(synchronize_session=False)
-    db.query(models.NotificationEvent).filter_by(family_id=family_id).delete(synchronize_session=False)
-    db.query(models.NotificationRecipient).filter_by(family_id=family_id).delete(synchronize_session=False)
-    db.query(models.AuditLog).filter_by(family_id=family_id).delete(synchronize_session=False)
-    if device_ids:
-        db.query(models.Device).filter(models.Device.id.in_(device_ids)).delete(synchronize_session=False)
-    if student_ids:
-        db.query(models.Student).filter(models.Student.id.in_(student_ids)).delete(synchronize_session=False)
-    db.query(models.FamilyMember).filter_by(family_id=family_id).delete(synchronize_session=False)
-    db.query(models.Family).filter_by(id=family_id).delete(synchronize_session=False)
-    db.commit()
+    """Only ever called on a family we've verified is the caller's own demo
+    family. Delegates to the shared cascade helper (see app/cascade.py) so
+    demo reset and real account/student deletion can't drift out of sync on
+    what needs cleaning up."""
+    cascade.delete_family(db, family_id)
 
 
 def _get_or_create_category(db: Session, key: str, label: str) -> models.ActivityCategory:
