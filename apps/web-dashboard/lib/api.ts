@@ -63,6 +63,10 @@ export const api = {
   createStudent: (family_id: string, display_name: string, age_range: string, timezone: string) =>
     request("/students", { method: "POST", body: JSON.stringify({ family_id, display_name, age_range, timezone }) }),
   listStudents: (familyId: string) => request(`/students/family/${familyId}`),
+  updateStudent: (studentId: string, payload: { display_name?: string; age_range?: string; timezone?: string }) =>
+    request(`/students/${studentId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  archiveStudent: (studentId: string) => request(`/students/${studentId}/archive`, { method: "POST" }),
+  unarchiveStudent: (studentId: string) => request(`/students/${studentId}/unarchive`, { method: "POST" }),
   deleteStudent: (studentId: string) => request(`/students/${studentId}`, { method: "DELETE" }),
   clearUsageHistory: (studentId: string) => request(`/students/${studentId}/usage/history`, { method: "DELETE" }),
   grantSiblingManager: (studentId: string, hours?: number | null) =>

@@ -6,7 +6,15 @@ import { api, clearToken, isDemoFamily } from "../../lib/api";
 import { useRequireAuth } from "../../lib/useRequireAuth";
 import { Header } from "../../components/Header";
 
-type Student = { id: string; display_name: string; family_id: string; is_sibling_manager?: boolean; sibling_manager_until?: string | null };
+type Student = {
+  id: string;
+  display_name: string;
+  family_id: string;
+  age_range: string;
+  is_sibling_manager?: boolean;
+  sibling_manager_until?: string | null;
+  is_archived?: boolean;
+};
 type TodayUsage = {
   total_seconds_by_category: Record<string, number>;
   total_seconds_by_rule: Record<string, number>;
@@ -143,11 +151,29 @@ type RuleModalState = {
   resetTime: string;
 };
 
+function conflictingRules(state: RuleModalState, existingRules: Rule[]): Rule[] {
+  // Two rules covering the same website (or the same category) for the same
+  // student would double-count usage against both limits and leave it
+  // ambiguous which warning/restriction actually applies -- flag it before
+  // save rather than let it happen silently.
+  return existingRules.filter((r) => {
+    if (r.id === state.ruleId) return false;
+    if (r.student_id !== state.studentId) return false;
+    if (!r.active) return false;
+    if (state.scopeMode === "category") {
+      return !!state.category && r.scope_category_key === state.category;
+    }
+    if (state.websiteIds.length === 0) return false;
+    return r.websites.some((w) => state.websiteIds.includes(w.id));
+  });
+}
+
 function RuleFormModal({
   state,
   setState,
   students,
   websiteCatalog,
+  existingRules,
   onAddCustomWebsite,
   onSubmit,
   onClose,
@@ -159,6 +185,7 @@ function RuleFormModal({
   setState: (updater: (prev: RuleModalState) => RuleModalState) => void;
   students: Student[];
   websiteCatalog: Website[];
+  existingRules: Rule[];
   onAddCustomWebsite: (domain: string, label: string) => Promise<Website | null>;
   onSubmit: () => void;
   onClose: () => void;
@@ -170,6 +197,7 @@ function RuleFormModal({
   const [customDomain, setCustomDomain] = useState("");
   const [customLabel, setCustomLabel] = useState("");
   const [addingCustom, setAddingCustom] = useState(false);
+  const conflicts = conflictingRules(state, existingRules);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -378,6 +406,13 @@ function RuleFormModal({
         <label htmlFor="rule-reset">Resets at</label>
         <input id="rule-reset" type="time" value={state.resetTime} onChange={(e) => setState((p) => ({ ...p, resetTime: e.target.value }))} />
 
+        {conflicts.length > 0 && (
+          <p style={{ color: "#92400e", fontSize: 13, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 10px" }}>
+            This overlaps with "{conflicts.map((r) => r.name).join(", ")}" for the same student. Usage would count
+            against both limits, and it won't be clear which one applies — consider adjusting one of them.
+          </p>
+        )}
+
         {error && <p style={{ color: "#991b1b", fontSize: 13 }}>{error}</p>}
 
         <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
@@ -406,6 +441,11 @@ export default function DashboardPage() {
   const [selectedView, setSelectedView] = useState<string>("");
   const focusedStudentId = selectedView && selectedView !== "all" ? selectedView : null;
   const focusedStudent = students.find((s) => s.id === focusedStudentId) || null;
+  // Archived students stay visible (and reversible) in "Manage students" but
+  // drop out of the Viewing selector, the "all students" summary, and the
+  // student picker inside the rule form -- archiving is meant to get someone
+  // out of the way without losing their history the way a hard delete would.
+  const activeStudents = students.filter((s) => !s.is_archived);
 
   const [usage, setUsage] = useState<TodayUsage | null>(null);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
@@ -452,6 +492,13 @@ export default function DashboardPage() {
   const [addStudentBusy, setAddStudentBusy] = useState(false);
   const [addStudentError, setAddStudentError] = useState<string | null>(null);
 
+  const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editAge, setEditAge] = useState(AGE_RANGES[2].key);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [archiveBusyId, setArchiveBusyId] = useState<string | null>(null);
+
   const [deleteStudentTarget, setDeleteStudentTarget] = useState<Student | null>(null);
   const [deleteStudentBusy, setDeleteStudentBusy] = useState(false);
   const [clearHistoryBusy, setClearHistoryBusy] = useState(false);
@@ -473,7 +520,14 @@ export default function DashboardPage() {
 
   async function loadFamilies() {
     try {
-      const fams = await api.myFamilies();
+      const allFams = await api.myFamilies();
+      // Defensive: an older build let "Explore with sample data" attach a
+      // demo family directly to a real account (fixed now -- see /demo/load
+      // server-side guard), so any account that isn't the reserved public
+      // demo login should never treat a leftover demo-named family as its
+      // primary one. Real families are preferred whenever both exist.
+      const realFams = allFams.filter((f: { name: string }) => !isDemoFamily(f.name));
+      const fams = realFams.length > 0 ? realFams : allFams;
       setFamilies(fams);
       if (fams.length > 0) {
         const s = await api.listStudents(fams[0].id);
@@ -482,11 +536,14 @@ export default function DashboardPage() {
         // usage. With more than one, default to the "All students" chooser so a
         // parent explicitly picks who they're looking at, rather than silently
         // landing on whichever student happened to load first.
-        if (s.length > 0) {
+        const activeNow = s.filter((st: Student) => !st.is_archived);
+        if (activeNow.length > 0) {
           setSelectedView((prev) => {
-            if (prev === "all" || (prev && s.some((st: Student) => st.id === prev))) return prev;
-            return s.length === 1 ? s[0].id : "all";
+            if (prev === "all" || (prev && activeNow.some((st: Student) => st.id === prev))) return prev;
+            return activeNow.length === 1 ? activeNow[0].id : "all";
           });
+        } else {
+          setSelectedView("");
         }
       } else {
         setStudents([]);
@@ -543,6 +600,44 @@ export default function DashboardPage() {
     }
   }
 
+  function startEditStudent(s: Student) {
+    setEditingStudentId(s.id);
+    setEditName(s.display_name);
+    setEditAge(s.age_range || AGE_RANGES[2].key);
+    setEditError(null);
+  }
+
+  async function handleSaveEditStudent() {
+    if (!editingStudentId || !editName.trim()) return;
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      await api.updateStudent(editingStudentId, { display_name: editName.trim(), age_range: editAge });
+      setEditingStudentId(null);
+      await loadFamilies();
+    } catch (e: any) {
+      setEditError(e.message || "Could not save these changes.");
+    } finally {
+      setEditBusy(false);
+    }
+  }
+
+  async function handleToggleArchive(s: Student) {
+    setArchiveBusyId(s.id);
+    try {
+      if (s.is_archived) {
+        await api.unarchiveStudent(s.id);
+      } else {
+        await api.archiveStudent(s.id);
+      }
+      await loadFamilies();
+    } catch (e: any) {
+      setError(e.message || "Could not update this student's archive status.");
+    } finally {
+      setArchiveBusyId(null);
+    }
+  }
+
   async function handleClearHistory() {
     if (!focusedStudentId) return;
     if (!window.confirm(`Clear all recorded activity history for ${focusedStudent?.display_name || "this student"}? This can't be undone.`)) return;
@@ -585,18 +680,6 @@ export default function DashboardPage() {
         /* non-fatal -- the website multi-select just won't have options yet */
       });
   }, [families]);
-
-  async function handleLoadDemo() {
-    setDemoBusy(true);
-    try {
-      await api.loadDemo();
-      await loadFamilies();
-    } catch (e: any) {
-      setError(e.message || "Could not load demo data.");
-    } finally {
-      setDemoBusy(false);
-    }
-  }
 
   async function handleResetDemo() {
     setDemoBusy(true);
@@ -927,9 +1010,9 @@ export default function DashboardPage() {
             <a href="/dashboard/activity">Activity</a>
             {setupStatus && !setupStatus.is_complete && <a href="/setup">Complete Setup</a>}
             <a href="/account">Account</a>
-            <a onClick={signOut} style={{ cursor: "pointer" }}>
+            <button type="button" className="link-button" onClick={signOut}>
               Sign out
-            </a>
+            </button>
           </>
         }
       />
@@ -945,11 +1028,18 @@ export default function DashboardPage() {
             </p>
             <button onClick={() => router.push("/setup")}>Start guided setup</button>
             <div style={{ borderTop: "1px solid var(--border)", marginTop: 16, paddingTop: 16 }}>
-              <button className="secondary" onClick={handleLoadDemo} disabled={demoBusy}>
-                {demoBusy ? "Loading..." : "Explore with sample data instead"}
-              </button>
+              <a
+                href="/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="secondary"
+                style={{ display: "inline-block", padding: "8px 14px", borderRadius: 8, border: "1px solid var(--border)", textDecoration: "none", color: "var(--ink)" }}
+              >
+                Explore Sample Dashboard ↗
+              </a>
               <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                Opens a separate sample family so you can see FocusSentinel in action -- it never touches your own
+                Opens the public interactive demo in a new tab, signed into a completely separate sample account -- it
+                never touches your own
                 family's data.
               </p>
             </div>
@@ -980,16 +1070,18 @@ export default function DashboardPage() {
 
             <p className="muted" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span>
-                {families[0]?.name || "Your family"} · {students.length} student{students.length === 1 ? "" : "s"}
+                {families[0]?.name || "Your family"} · {activeStudents.length} student{activeStudents.length === 1 ? "" : "s"}
               </span>
               {isDemoFamily(families[0]?.name) && <span className="badge none">Demo · sample data</span>}
               {setupStatus && !setupStatus.is_complete && setupReminderDismissed && (
-                <a
+                <button
+                  type="button"
+                  className="link-button"
                   onClick={() => router.push("/setup")}
-                  style={{ cursor: "pointer", fontSize: 13, color: "var(--warn)" }}
+                  style={{ fontSize: 13, color: "var(--warn)" }}
                 >
                   Setup incomplete · {setupStatus.completed_steps} of {setupStatus.total_steps} steps
-                </a>
+                </button>
               )}
               {isDemoFamily(families[0]?.name) && (
                 <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
@@ -1003,14 +1095,14 @@ export default function DashboardPage() {
               )}
             </p>
 
-            {students.length > 0 && (
+            {activeStudents.length > 0 && (
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
                 <label htmlFor="student-select" style={{ margin: 0, whiteSpace: "nowrap" }}>
                   Viewing
                 </label>
                 <select id="student-select" value={selectedView} onChange={(e) => setSelectedView(e.target.value)} style={{ width: "auto", marginBottom: 0 }}>
-                  {students.length > 1 && <option value="all">All students</option>}
-                  {students.map((s) => (
+                  {activeStudents.length > 1 && <option value="all">All students</option>}
+                  {activeStudents.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.display_name}
                     </option>
@@ -1050,6 +1142,10 @@ export default function DashboardPage() {
                   {showAddStudent ? "Cancel" : "+ Add a student"}
                 </button>
               </div>
+              <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                Archiving hides a student from the dashboard and rule creation without deleting their history — reverse
+                it anytime with Unarchive. Delete removes them and their history permanently.
+              </p>
               {showAddStudent && (
                 <form onSubmit={handleAddStudent} style={{ margin: "12px 0", padding: 12, background: "var(--accent-soft)", borderRadius: 10 }}>
                   <label htmlFor="add-student-name">Student's name</label>
@@ -1071,65 +1167,109 @@ export default function DashboardPage() {
               {students.length === 0 && <p className="muted">No students yet — add your first one above.</p>}
               {allSummaryLoading && <p className="muted">Loading...</p>}
               {students.map((s) => (
-                <div className="row" key={s.id}>
-                  <span>
-                    {s.display_name}
-                    {s.is_sibling_manager && (
-                      <span className="badge none" style={{ marginLeft: 8, fontSize: 11 }}>
-                        Manages siblings{s.sibling_manager_until ? ` until ${new Date(s.sibling_manager_until).toLocaleString()}` : ""}
-                      </span>
-                    )}
-                  </span>
-                  <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <span className="muted" style={{ fontSize: 13 }}>
-                      {allSummary[s.id]?.rulesCount ?? 0} rule{(allSummary[s.id]?.rulesCount ?? 0) === 1 ? "" : "s"}
-                      {allSummary[s.id]?.restricted ? " · restricted" : ""}
-                    </span>
-                    <button className="secondary" onClick={() => setSelectedView(s.id)} style={{ fontSize: 13, padding: "6px 10px" }}>
-                      View
-                    </button>
-                    {students.length > 1 && (
-                      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        {s.is_sibling_manager ? (
-                          <button
-                            className="secondary"
-                            disabled={siblingManagerBusy}
-                            onClick={() => handleToggleSiblingManager(s)}
-                            style={{ fontSize: 13, padding: "6px 10px" }}
-                          >
-                            Remove manage access
-                          </button>
-                        ) : (
-                          <>
-                            <select
-                              value={siblingManagerDuration[s.id] || "24"}
-                              onChange={(e) => setSiblingManagerDuration((prev) => ({ ...prev, [s.id]: e.target.value }))}
-                              style={{ width: "auto", margin: 0, padding: "4px 6px", fontSize: 12 }}
-                            >
-                              <option value="1">1 hour</option>
-                              <option value="24">1 day</option>
-                              <option value="168">1 week</option>
-                              <option value="">Indefinite</option>
-                            </select>
-                            <button
-                              className="secondary"
-                              disabled={siblingManagerBusy}
-                              onClick={() => handleToggleSiblingManager(s)}
-                              style={{ fontSize: 13, padding: "6px 10px" }}
-                            >
-                              Let manage siblings
-                            </button>
-                          </>
+                <div key={s.id} style={{ borderBottom: "1px solid var(--border)", padding: "8px 0" }}>
+                  {editingStudentId === s.id ? (
+                    <div style={{ padding: 12, background: "var(--accent-soft)", borderRadius: 10 }}>
+                      <label htmlFor={`edit-name-${s.id}`}>Name</label>
+                      <input id={`edit-name-${s.id}`} value={editName} onChange={(e) => setEditName(e.target.value)} />
+                      <label htmlFor={`edit-age-${s.id}`}>Age range</label>
+                      <select id={`edit-age-${s.id}`} value={editAge} onChange={(e) => setEditAge(e.target.value)}>
+                        {AGE_RANGES.map((a) => (
+                          <option key={a.key} value={a.key}>
+                            {a.label}
+                          </option>
+                        ))}
+                      </select>
+                      {editError && <p style={{ color: "#991b1b", fontSize: 13 }}>{editError}</p>}
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button onClick={handleSaveEditStudent} disabled={editBusy || !editName.trim()}>
+                          {editBusy ? "Saving..." : "Save"}
+                        </button>
+                        <button className="secondary" onClick={() => setEditingStudentId(null)} disabled={editBusy}>
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="row" style={{ borderBottom: "none", padding: 0 }}>
+                      <span>
+                        {s.display_name}
+                        {s.is_archived && (
+                          <span className="badge none" style={{ marginLeft: 8, fontSize: 11 }}>
+                            Archived
+                          </span>
+                        )}
+                        {s.is_sibling_manager && (
+                          <span className="badge none" style={{ marginLeft: 8, fontSize: 11 }}>
+                            Manages siblings{s.sibling_manager_until ? ` until ${new Date(s.sibling_manager_until).toLocaleString()}` : ""}
+                          </span>
                         )}
                       </span>
-                    )}
-                    <button className="danger" onClick={() => setDeleteStudentTarget(s)} style={{ fontSize: 13, padding: "6px 10px" }}>
-                      Delete
-                    </button>
-                  </span>
+                      <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span className="muted" style={{ fontSize: 13 }}>
+                          {allSummary[s.id]?.rulesCount ?? 0} rule{(allSummary[s.id]?.rulesCount ?? 0) === 1 ? "" : "s"}
+                          {allSummary[s.id]?.restricted ? " · restricted" : ""}
+                        </span>
+                        {!s.is_archived && (
+                          <button className="secondary" onClick={() => setSelectedView(s.id)} style={{ fontSize: 13, padding: "6px 10px" }}>
+                            View
+                          </button>
+                        )}
+                        <button className="secondary" onClick={() => startEditStudent(s)} style={{ fontSize: 13, padding: "6px 10px" }}>
+                          Edit
+                        </button>
+                        {!s.is_archived && activeStudents.length > 1 && (
+                          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                            {s.is_sibling_manager ? (
+                              <button
+                                className="secondary"
+                                disabled={siblingManagerBusy}
+                                onClick={() => handleToggleSiblingManager(s)}
+                                style={{ fontSize: 13, padding: "6px 10px" }}
+                              >
+                                Remove manage access
+                              </button>
+                            ) : (
+                              <>
+                                <select
+                                  value={siblingManagerDuration[s.id] || "24"}
+                                  onChange={(e) => setSiblingManagerDuration((prev) => ({ ...prev, [s.id]: e.target.value }))}
+                                  style={{ width: "auto", margin: 0, padding: "4px 6px", fontSize: 12 }}
+                                >
+                                  <option value="1">1 hour</option>
+                                  <option value="24">1 day</option>
+                                  <option value="168">1 week</option>
+                                  <option value="">Indefinite</option>
+                                </select>
+                                <button
+                                  className="secondary"
+                                  disabled={siblingManagerBusy}
+                                  onClick={() => handleToggleSiblingManager(s)}
+                                  style={{ fontSize: 13, padding: "6px 10px" }}
+                                >
+                                  Let manage siblings
+                                </button>
+                              </>
+                            )}
+                          </span>
+                        )}
+                        <button
+                          className="secondary"
+                          disabled={archiveBusyId === s.id}
+                          onClick={() => handleToggleArchive(s)}
+                          style={{ fontSize: 13, padding: "6px 10px" }}
+                        >
+                          {archiveBusyId === s.id ? "..." : s.is_archived ? "Unarchive" : "Archive"}
+                        </button>
+                        <button className="danger" onClick={() => setDeleteStudentTarget(s)} style={{ fontSize: 13, padding: "6px 10px" }}>
+                          Delete
+                        </button>
+                      </span>
+                    </div>
+                  )}
                 </div>
               ))}
-              {students.length > 1 && (
+              {activeStudents.length > 1 && (
                 <p className="muted" style={{ fontSize: 12, marginTop: 10, marginBottom: 0 }}>
                   "Let manage siblings" authorizes that student (they need their own sign-in first) to edit screen-time
                   rules and approve or deny extension requests for the others, for the duration you pick — handy for
@@ -1139,7 +1279,7 @@ export default function DashboardPage() {
             </div>
 
             {selectedView === "all" ? (
-              students.length > 1 && (
+              activeStudents.length > 1 && (
                 <p className="muted" style={{ fontSize: 13 }}>
                   Pick "View" above for any student to see their usage, rules, and requests.
                 </p>
@@ -1202,7 +1342,12 @@ export default function DashboardPage() {
 
                   <div className="card">
                     <h2>Screen-time rules</h2>
-                    {rules.length === 0 && <p className="muted">No rules set yet for this student.</p>}
+                    {rules.length === 0 && (
+                      <p className="muted">
+                        No screen-time rules yet for {focusedStudent?.display_name || "this student"}. Add one below to
+                        start tracking and limiting their time on specific sites or categories.
+                      </p>
+                    )}
                     {rules.map((rule) => {
                       const sitesLine = ruleSitesLine(rule);
                       return (
@@ -1466,8 +1611,9 @@ export default function DashboardPage() {
         <RuleFormModal
           state={ruleModal}
           setState={(updater) => setRuleModal((prev) => (prev ? updater(prev) : prev))}
-          students={students}
+          students={activeStudents}
           websiteCatalog={websiteCatalog}
+          existingRules={rules}
           onAddCustomWebsite={handleAddCustomWebsiteGlobal}
           onSubmit={handleSubmitRuleModal}
           onClose={() => setRuleModal(null)}

@@ -69,6 +69,7 @@ def delete_students(db: Session, student_ids: list[str], *, delete_logins: bool 
     db.query(models.UsageEvent).filter(models.UsageEvent.student_id.in_(student_ids)).delete(synchronize_session=False)
     db.query(models.DailyUsageTotal).filter(models.DailyUsageTotal.student_id.in_(student_ids)).delete(synchronize_session=False)
     db.query(models.SiblingManagerGrant).filter(models.SiblingManagerGrant.manager_student_id.in_(student_ids)).delete(synchronize_session=False)
+    db.query(models.StudentArchiveState).filter(models.StudentArchiveState.student_id.in_(student_ids)).delete(synchronize_session=False)
 
     delete_rules(db, rule_ids)
 

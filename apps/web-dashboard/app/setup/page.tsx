@@ -342,7 +342,7 @@ export default function SetupWizardPage() {
 
   return (
     <>
-      <Header active="dashboard" right={<a onClick={finishLater} style={{ cursor: "pointer" }}>Save and finish later</a>} />
+      <Header active="dashboard" right={<button type="button" className="link-button" onClick={finishLater}>Save and finish later</button>} />
       <div className="container" style={{ maxWidth: 560 }}>
         {step === 1 && (
           <>
@@ -545,7 +545,7 @@ export default function SetupWizardPage() {
             )}
             {selectedWebsites.length === 0 && (
               <p className="muted" style={{ fontSize: 13 }}>
-                No websites selected yet. <a onClick={() => setStep(3)} style={{ cursor: "pointer", color: "var(--accent)" }}>Go back and choose some.</a>
+                No websites selected yet. <button type="button" className="link-button" onClick={() => setStep(3)}>Go back and choose some.</button>
               </p>
             )}
 

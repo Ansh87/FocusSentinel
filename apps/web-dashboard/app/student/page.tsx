@@ -195,9 +195,9 @@ export default function StudentPage() {
       <>
         <Header
           right={
-            <a onClick={signOut} style={{ cursor: "pointer" }}>
+            <button type="button" className="link-button" onClick={signOut}>
               Sign out
-            </a>
+            </button>
           }
         />
         <div className="container">
@@ -214,9 +214,9 @@ export default function StudentPage() {
         right={
           <>
             <a href="/account">Account</a>
-            <a onClick={signOut} style={{ cursor: "pointer" }}>
+            <button type="button" className="link-button" onClick={signOut}>
               Sign out
-            </a>
+            </button>
           </>
         }
       />

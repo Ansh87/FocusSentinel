@@ -308,6 +308,20 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class StudentArchiveState(Base):
+    """Whether a student profile is archived, tracked as a separate table
+    rather than a new column on `students` -- `students` is an
+    already-deployed table, and `Base.metadata.create_all` can add new
+    tables but can't ALTER an existing one's columns. Presence of a row
+    means archived; absence means active. Archiving is a soft, reversible
+    action distinct from DELETE /students/{id}, which permanently erases
+    the student and everything under them."""
+
+    __tablename__ = "student_archive_state"
+    student_id: Mapped[str] = mapped_column(String(36), ForeignKey("students.id"), primary_key=True)
+    archived_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class FamilyOnboardingState(Base):
     """Tracks the one-time first-setup wizard for a family: when it was
     started, when it was finished, and whether the parent explicitly

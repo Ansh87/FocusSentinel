@@ -24,12 +24,12 @@ export default function DisclaimerPage() {
         <div className="card">
           <h2>Project status</h2>
           <p>
-            This is a student-built demo / hackathon submission representing a first, working
-            slice of a larger idea, not a finished, production-hardened application. It hasn't
-            gone through a professional security audit, and it shouldn't be relied on as a sole
-            safety or parental-control tool for a real child without further review. See the{" "}
-            <a href="/about">About page</a> for an honest breakdown of what's actually implemented
-            versus planned.
+            FocusSentinel is an independently built, actively developed application — a real,
+            working first version of a larger idea, not a finished, production-hardened product.
+            It hasn't gone through a professional security audit, and it shouldn't be relied on as
+            a sole safety or parental-control tool for a real child without further review. See
+            the <a href="/about">About page</a> for an honest breakdown of what's actually
+            implemented versus planned.
           </p>
         </div>
 

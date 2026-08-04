@@ -200,8 +200,24 @@ def ensure_demo_account_family(db: Session, user: models.User) -> None:
         _create_demo_family(db, user)
 
 
+def _require_demo_account(user: models.User) -> None:
+    """Sample data must never be injectable into a real family's account --
+    see the product requirement "never mix demo data with real family data."
+    These three endpoints used to be reachable by *any* signed-in parent,
+    which meant a real account with zero families yet could get a "Demo
+    Family (Sample Data)" family created directly inside its own account via
+    the dashboard's old "Explore with sample data instead" button. That
+    button now opens the public demo in a separate browser tab/session
+    instead (see the login page's "Try the Interactive Demo" flow) --
+    this guard is what makes that the *only* way in, closing the gap
+    server-side rather than trusting the frontend not to call this."""
+    if user.email != RESERVED_DEMO_EMAIL:
+        raise HTTPException(403, "Sample data is only available through the public interactive demo account.")
+
+
 @router.post("/load")
 def load_demo(db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    _require_demo_account(user)
     existing = _find_demo_family(db, user.id)
     if existing:
         student = db.query(models.Student).filter_by(family_id=existing.id).first()
@@ -212,6 +228,7 @@ def load_demo(db: Session = Depends(get_db), user: models.User = Depends(require
 
 @router.post("/reset")
 def reset_demo(db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    _require_demo_account(user)
     existing = _find_demo_family(db, user.id)
     if existing:
         _delete_family_cascade(db, existing.id)
@@ -228,6 +245,7 @@ def simulate_activity(db: Session = Depends(get_db), user: models.User = Depends
     triggered on demand instead of waiting on real browsing. The frontend is
     responsible for labeling this clearly as "Demo simulation."
     """
+    _require_demo_account(user)
     family = _find_demo_family(db, user.id)
     if not family:
         raise HTTPException(404, "Load the demo family first.")

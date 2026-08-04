@@ -12,11 +12,12 @@ from ..usage_service import seconds_today_for_rule
 router = APIRouter(prefix="/students", tags=["students"])
 
 
-def _with_sibling_manager_flag(db: Session, student: models.Student) -> schemas.StudentOut:
+def _to_student_out(db: Session, student: models.Student) -> schemas.StudentOut:
     out = schemas.StudentOut.model_validate(student)
     grant = active_sibling_grant(db, student.family_id, student.id)
     out.is_sibling_manager = grant is not None
     out.sibling_manager_until = grant.expires_at if grant else None
+    out.is_archived = db.get(models.StudentArchiveState, student.id) is not None
     return out
 
 
@@ -25,7 +26,7 @@ def my_student_profile(db: Session = Depends(get_db), user: models.User = Depend
     student = db.query(models.Student).filter_by(user_id=user.id).first()
     if not student:
         raise HTTPException(404, "No student profile is linked to this account.")
-    return _with_sibling_manager_flag(db, student)
+    return _to_student_out(db, student)
 
 
 @router.post("", response_model=schemas.StudentOut, status_code=201)
@@ -60,7 +61,7 @@ def create_student(payload: schemas.StudentCreate, db: Session = Depends(get_db)
 @router.get("/family/{family_id}", response_model=list[schemas.StudentOut])
 def list_students(family_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     students = db.query(models.Student).filter_by(family_id=family_id).all()
-    return [_with_sibling_manager_flag(db, s) for s in students]
+    return [_to_student_out(db, s) for s in students]
 
 
 def _student_and_family(db: Session, student_id: str) -> tuple[models.Student, models.Family]:
@@ -68,6 +69,78 @@ def _student_and_family(db: Session, student_id: str) -> tuple[models.Student, m
     if not student:
         raise HTTPException(404, "Student not found")
     return student, db.get(models.Family, student.family_id)
+
+
+@router.patch("/{student_id}", response_model=schemas.StudentOut)
+def update_student(student_id: str, payload: schemas.StudentUpdate, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    student, family = _student_and_family(db, student_id)
+    membership = db.query(models.FamilyMember).filter_by(family_id=family.id, user_id=user.id).first()
+    if not membership:
+        raise HTTPException(403, "Not a member of this family")
+    fields = payload.model_dump(exclude_unset=True)
+    for field, value in fields.items():
+        if value is not None:
+            setattr(student, field, value)
+    db.add(
+        models.AuditLog(
+            family_id=family.id,
+            actor_user_id=user.id,
+            actor_type="parent",
+            action="student.updated",
+            target_type="student",
+            target_id=student.id,
+            event_metadata=fields,
+        )
+    )
+    db.commit()
+    db.refresh(student)
+    return _to_student_out(db, student)
+
+
+@router.post("/{student_id}/archive", response_model=schemas.StudentOut)
+def archive_student(student_id: str, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    """Soft, reversible removal -- hides the student from the main dashboard
+    selector and from being assigned new rules/devices, without deleting
+    their history. Distinct from DELETE /students/{id}, which is permanent."""
+    student, family = _student_and_family(db, student_id)
+    membership = db.query(models.FamilyMember).filter_by(family_id=family.id, user_id=user.id).first()
+    if not membership:
+        raise HTTPException(403, "Not a member of this family")
+    if not db.get(models.StudentArchiveState, student_id):
+        db.add(models.StudentArchiveState(student_id=student_id))
+        db.add(
+            models.AuditLog(
+                family_id=family.id,
+                actor_user_id=user.id,
+                actor_type="parent",
+                action="student.archived",
+                target_type="student",
+                target_id=student_id,
+            )
+        )
+        db.commit()
+    return _to_student_out(db, student)
+
+
+@router.post("/{student_id}/unarchive", response_model=schemas.StudentOut)
+def unarchive_student(student_id: str, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    student, family = _student_and_family(db, student_id)
+    membership = db.query(models.FamilyMember).filter_by(family_id=family.id, user_id=user.id).first()
+    if not membership:
+        raise HTTPException(403, "Not a member of this family")
+    db.query(models.StudentArchiveState).filter_by(student_id=student_id).delete(synchronize_session=False)
+    db.add(
+        models.AuditLog(
+            family_id=family.id,
+            actor_user_id=user.id,
+            actor_type="parent",
+            action="student.unarchived",
+            target_type="student",
+            target_id=student_id,
+        )
+    )
+    db.commit()
+    return _to_student_out(db, student)
 
 
 def _require_family_membership(db: Session, user: models.User, family_id: str) -> None:

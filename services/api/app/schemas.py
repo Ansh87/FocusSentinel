@@ -91,6 +91,12 @@ class StudentCreate(BaseModel):
     timezone: str = "UTC"
 
 
+class StudentUpdate(BaseModel):
+    display_name: Optional[str] = None
+    age_range: Optional[Literal["under_8", "8_12", "13_15", "16_17", "18_plus"]] = None
+    timezone: Optional[str] = None
+
+
 class StudentOut(BaseModel):
     id: str
     family_id: str
@@ -99,6 +105,7 @@ class StudentOut(BaseModel):
     timezone: str
     is_sibling_manager: bool = False
     sibling_manager_until: Optional[datetime] = None
+    is_archived: bool = False
     model_config = {"from_attributes": True}
 
 

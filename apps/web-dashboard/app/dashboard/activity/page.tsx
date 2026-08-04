@@ -69,9 +69,9 @@ export default function ActivityHistoryPage() {
       <Header
         active="dashboard"
         right={
-          <a onClick={signOut} style={{ cursor: "pointer" }}>
+          <button type="button" className="link-button" onClick={signOut}>
             Sign out
-          </a>
+          </button>
         }
       />
       <div className="container">

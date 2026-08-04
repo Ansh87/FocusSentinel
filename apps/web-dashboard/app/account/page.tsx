@@ -76,9 +76,9 @@ export default function AccountPage() {
     <>
       <Header
         right={
-          <a onClick={signOut} style={{ cursor: "pointer" }}>
+          <button type="button" className="link-button" onClick={signOut}>
             Sign out
-          </a>
+          </button>
         }
       />
       <div className="container" style={{ maxWidth: 420 }}>

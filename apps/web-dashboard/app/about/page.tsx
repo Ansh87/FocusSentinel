@@ -88,8 +88,8 @@ export default function AboutPage() {
       <div className="card">
         <h2>Current scope &amp; honest limitations</h2>
         <p>
-          This is a Phase 1 vertical slice, built to prove the core tracking, warning, and
-          restriction flow end-to-end rather than to be a finished consumer product. It currently
+          This is an early, working version built to prove out the core tracking, warning, and
+          restriction flow end-to-end, not yet a finished consumer product. It currently
           only sees activity inside a Chrome or Edge browser with the extension installed — there
           is no native Windows, macOS, Android, or iOS agent yet, so it cannot see or restrict
           usage inside native mobile apps (the TikTok app, Instagram app, etc.) on a phone, only

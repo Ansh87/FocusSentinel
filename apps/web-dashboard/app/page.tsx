@@ -219,20 +219,20 @@ export default function LoginPage() {
                 {mode === "signin" ? (
                   <>
                     New here?{" "}
-                    <a onClick={() => switchMode("signup")} style={{ cursor: "pointer", color: "var(--accent)" }}>
+                    <button type="button" className="link-button" onClick={() => switchMode("signup")}>
                       Create an account
-                    </a>
+                    </button>
                     {" · "}
-                    <a onClick={() => switchMode("forgot")} style={{ cursor: "pointer", color: "var(--accent)" }}>
+                    <button type="button" className="link-button" onClick={() => switchMode("forgot")}>
                       Forgot password?
-                    </a>
+                    </button>
                   </>
                 ) : (
                   <>
                     Already have an account?{" "}
-                    <a onClick={() => switchMode("signin")} style={{ cursor: "pointer", color: "var(--accent)" }}>
+                    <button type="button" className="link-button" onClick={() => switchMode("signin")}>
                       Sign in
-                    </a>
+                    </button>
                   </>
                 )}
               </p>
