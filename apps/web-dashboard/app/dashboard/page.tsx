@@ -8,8 +8,18 @@ import { Header } from "../../components/Header";
 type Student = { id: string; display_name: string; family_id: string };
 type TodayUsage = {
   total_seconds_by_category: Record<string, number>;
+  total_seconds_by_rule: Record<string, number>;
   active_warnings: { level: number; rule_id: string }[];
   active_restrictions: { rule_id: string; reason: string; scheduled_reset_at: string }[];
+};
+type Website = {
+  id: string;
+  domain: string;
+  url_pattern: string | null;
+  label: string;
+  category_id: string | null;
+  source: string;
+  is_custom: boolean;
 };
 type Rule = {
   id: string;
@@ -17,6 +27,7 @@ type Rule = {
   name: string;
   scope_type: string;
   scope_category_key: string | null;
+  websites: Website[];
   daily_limit_minutes: number | null;
   warning_one_at_minutes: number;
   active: boolean;
@@ -37,6 +48,12 @@ const CATEGORY_OPTIONS = [
 
 function categoryLabel(key: string) {
   return CATEGORY_OPTIONS.find((c) => c.key === key)?.label || key.replace(/_/g, " ");
+}
+
+function ruleDisplayLabel(rule: Rule) {
+  if (rule.websites.length > 0) return rule.websites.map((w) => w.label).join(" + ");
+  if (rule.scope_category_key) return categoryLabel(rule.scope_category_key);
+  return rule.name;
 }
 
 function usageStatusFor(usage: TodayUsage | null, ruleId: string, percent: number) {
@@ -68,10 +85,18 @@ export default function DashboardPage() {
   const [simBusy, setSimBusy] = useState(false);
 
   const [showNewRule, setShowNewRule] = useState(false);
+  const [scopeMode, setScopeMode] = useState<"category" | "websites">("category");
   const [newCategory, setNewCategory] = useState(CATEGORY_OPTIONS[0].key);
   const [newLimit, setNewLimit] = useState("30");
   const [creatingRule, setCreatingRule] = useState(false);
   const [ruleError, setRuleError] = useState<string | null>(null);
+
+  const [websiteCatalog, setWebsiteCatalog] = useState<Website[]>([]);
+  const [websiteSearch, setWebsiteSearch] = useState("");
+  const [selectedWebsiteIds, setSelectedWebsiteIds] = useState<string[]>([]);
+  const [customDomain, setCustomDomain] = useState("");
+  const [customLabel, setCustomLabel] = useState("");
+  const [addingCustomWebsite, setAddingCustomWebsite] = useState(false);
 
   async function loadFamilies() {
     try {
@@ -96,6 +121,16 @@ export default function DashboardPage() {
     loadFamilies();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!families[0]?.id) return;
+    api
+      .websitesCatalog(families[0].id)
+      .then(setWebsiteCatalog)
+      .catch(() => {
+        /* non-fatal — the website multi-select just won't have options yet */
+      });
+  }, [families]);
 
   async function handleLoadDemo() {
     setDemoBusy(true);
@@ -192,6 +227,39 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleAddCustomWebsite() {
+    if (!customDomain.trim() || !families[0]?.id) return;
+    setAddingCustomWebsite(true);
+    setRuleError(null);
+    try {
+      const site: Website = await api.addWebsite({
+        family_id: families[0].id,
+        domain: customDomain.trim(),
+        label: customLabel.trim() || customDomain.trim(),
+        category_key: "other",
+      });
+      setWebsiteCatalog((prev) => (prev.some((w) => w.id === site.id) ? prev : [...prev, site]));
+      setSelectedWebsiteIds((prev) => (prev.includes(site.id) ? prev : [...prev, site.id]));
+      setCustomDomain("");
+      setCustomLabel("");
+    } catch (e: any) {
+      setRuleError(e.message || "Could not add that website — check the domain format.");
+    } finally {
+      setAddingCustomWebsite(false);
+    }
+  }
+
+  function resetRuleForm() {
+    setNewLimit("30");
+    setSelectedWebsiteIds([]);
+    setWebsiteSearch("");
+    setCustomDomain("");
+    setCustomLabel("");
+    setScopeMode("category");
+    setShowNewRule(false);
+    setRuleError(null);
+  }
+
   async function handleCreateRule(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedStudent) return;
@@ -200,22 +268,40 @@ export default function DashboardPage() {
       setRuleError("Enter a limit greater than 0 minutes.");
       return;
     }
+    if (scopeMode === "websites" && selectedWebsiteIds.length === 0) {
+      setRuleError("Select at least one website, or switch to a category limit.");
+      return;
+    }
     setCreatingRule(true);
     setRuleError(null);
     try {
-      const label = CATEGORY_OPTIONS.find((c) => c.key === newCategory)?.label || newCategory;
-      await api.createRule({
-        student_id: selectedStudent,
-        name: `${label} limit`,
-        scope_type: "category",
-        scope_category_key: newCategory,
-        daily_limit_minutes: minutes,
-        warning_one_at_minutes: minutes,
-        warning_two_after_additional_minutes: Math.max(1, Math.round(minutes * 0.25)),
-        block_after_warning_two_seconds: 60,
-      });
-      setNewLimit("30");
-      setShowNewRule(false);
+      if (scopeMode === "websites") {
+        const chosen = websiteCatalog.filter((w) => selectedWebsiteIds.includes(w.id));
+        const name = chosen.map((w) => w.label).join(" + ") || "Website limit";
+        await api.createRule({
+          student_id: selectedStudent,
+          name,
+          scope_type: "website",
+          website_ids: selectedWebsiteIds,
+          daily_limit_minutes: minutes,
+          warning_one_at_minutes: minutes,
+          warning_two_after_additional_minutes: Math.max(1, Math.round(minutes * 0.25)),
+          block_after_warning_two_seconds: 60,
+        });
+      } else {
+        const label = CATEGORY_OPTIONS.find((c) => c.key === newCategory)?.label || newCategory;
+        await api.createRule({
+          student_id: selectedStudent,
+          name: `${label} limit`,
+          scope_type: "category",
+          scope_category_key: newCategory,
+          daily_limit_minutes: minutes,
+          warning_one_at_minutes: minutes,
+          warning_two_after_additional_minutes: Math.max(1, Math.round(minutes * 0.25)),
+          block_after_warning_two_seconds: 60,
+        });
+      }
+      resetRuleForm();
       await refresh();
     } catch (e: any) {
       setRuleError(e.message || "Could not create rule.");
@@ -325,8 +411,8 @@ export default function DashboardPage() {
             <p className="muted">No tracked activity yet today.</p>
           ) : (
             rules.map((rule) => {
-              const key = rule.scope_category_key;
-              const seconds = (key && usage?.total_seconds_by_category[key]) || 0;
+              const label = ruleDisplayLabel(rule);
+              const seconds = usage?.total_seconds_by_rule[rule.id] || 0;
               const minutesUsed = seconds / 60;
               const limit = rule.daily_limit_minutes || 0;
               const remaining = Math.max(0, limit - minutesUsed);
@@ -335,7 +421,7 @@ export default function DashboardPage() {
               return (
                 <div key={rule.id} style={{ marginBottom: 16 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-                    <strong>{key ? categoryLabel(key) : rule.name}</strong>
+                    <strong>{label}</strong>
                     <span className={`badge ${status.cls}`}>{status.text}</span>
                   </div>
                   <p className="muted" style={{ margin: "0 0 6px", fontSize: 13 }}>
@@ -346,7 +432,7 @@ export default function DashboardPage() {
                     aria-valuenow={percent}
                     aria-valuemin={0}
                     aria-valuemax={100}
-                    aria-label={`${key ? categoryLabel(key) : rule.name} usage`}
+                    aria-label={`${label} usage`}
                     style={{ background: "var(--border)", borderRadius: 999, height: 8, overflow: "hidden" }}
                   >
                     <div
@@ -395,6 +481,11 @@ export default function DashboardPage() {
             <div className="row" key={rule.id}>
               <span>
                 {rule.name}
+                {rule.websites.length > 0 && (
+                  <span className="muted" style={{ display: "block", fontSize: 12 }}>
+                    {rule.websites.map((w) => w.label).join(", ")}
+                  </span>
+                )}
                 {!rule.active && <span className="muted"> (inactive)</span>}
               </span>
               <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -419,21 +510,129 @@ export default function DashboardPage() {
 
           {showNewRule ? (
             <form onSubmit={handleCreateRule} style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 16 }}>
-              <label>Category</label>
-              <select value={newCategory} onChange={(e) => setNewCategory(e.target.value)}>
-                {CATEGORY_OPTIONS.map((c) => (
-                  <option key={c.key} value={c.key}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-              <label>Daily limit (minutes)</label>
-              <input type="number" min={1} value={newLimit} onChange={(e) => setNewLimit(e.target.value)} />
+              <fieldset style={{ border: "none", padding: 0, margin: "0 0 12px" }}>
+                <legend className="muted" style={{ fontSize: 13, marginBottom: 4 }}>What should this limit cover?</legend>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 4, marginRight: 16, fontWeight: 400 }}>
+                  <input type="radio" checked={scopeMode === "category"} onChange={() => setScopeMode("category")} />
+                  A whole category
+                </label>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontWeight: 400 }}>
+                  <input type="radio" checked={scopeMode === "websites"} onChange={() => setScopeMode("websites")} />
+                  Specific websites
+                </label>
+              </fieldset>
+
+              {scopeMode === "category" ? (
+                <>
+                  <label htmlFor="new-rule-category">Category</label>
+                  <select id="new-rule-category" value={newCategory} onChange={(e) => setNewCategory(e.target.value)}>
+                    {CATEGORY_OPTIONS.map((c) => (
+                      <option key={c.key} value={c.key}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              ) : (
+                <div style={{ marginBottom: 12 }}>
+                  <label htmlFor="website-search">Websites (search or pick from the list)</label>
+                  {selectedWebsiteIds.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                      {websiteCatalog
+                        .filter((w) => selectedWebsiteIds.includes(w.id))
+                        .map((w) => (
+                          <span key={w.id} className="badge none" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            {w.label}
+                            <button
+                              type="button"
+                              aria-label={`Remove ${w.label}`}
+                              onClick={() => setSelectedWebsiteIds((prev) => prev.filter((id) => id !== w.id))}
+                              style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1, color: "inherit" }}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                    </div>
+                  )}
+                  <input
+                    id="website-search"
+                    type="text"
+                    placeholder="Search TikTok, YouTube Shorts, Instagram Reels..."
+                    value={websiteSearch}
+                    onChange={(e) => setWebsiteSearch(e.target.value)}
+                  />
+                  <div
+                    role="listbox"
+                    aria-label="Website search results"
+                    style={{ maxHeight: 160, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8, marginTop: 6 }}
+                  >
+                    {websiteCatalog
+                      .filter((w) => !selectedWebsiteIds.includes(w.id))
+                      .filter((w) => w.label.toLowerCase().includes(websiteSearch.toLowerCase()) || w.domain.includes(websiteSearch.toLowerCase()))
+                      .slice(0, 8)
+                      .map((w) => (
+                        <button
+                          key={w.id}
+                          type="button"
+                          role="option"
+                          aria-selected={false}
+                          onClick={() => setSelectedWebsiteIds((prev) => [...prev, w.id])}
+                          style={{
+                            display: "block",
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "6px 10px",
+                            background: "none",
+                            border: "none",
+                            borderBottom: "1px solid var(--border)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {w.label} <span className="muted" style={{ fontSize: 12 }}>{w.domain}{w.url_pattern || ""}</span>
+                        </button>
+                      ))}
+                    {websiteCatalog.length === 0 && (
+                      <p className="muted" style={{ fontSize: 13, padding: "6px 10px" }}>Loading website catalog...</p>
+                    )}
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                    <input
+                      type="text"
+                      placeholder="Custom domain, e.g. khanacademy.org"
+                      value={customDomain}
+                      onChange={(e) => setCustomDomain(e.target.value)}
+                      style={{ flex: "1 1 160px", marginBottom: 0 }}
+                      aria-label="Custom domain"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Label (optional)"
+                      value={customLabel}
+                      onChange={(e) => setCustomLabel(e.target.value)}
+                      style={{ flex: "1 1 120px", marginBottom: 0 }}
+                      aria-label="Custom website label"
+                    />
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={addingCustomWebsite || !customDomain.trim()}
+                      onClick={handleAddCustomWebsite}
+                    >
+                      {addingCustomWebsite ? "Adding..." : "Add domain"}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <label htmlFor="new-rule-limit">Daily limit (minutes)</label>
+              <input id="new-rule-limit" type="number" min={1} value={newLimit} onChange={(e) => setNewLimit(e.target.value)} />
               {ruleError && <p style={{ color: "#991b1b", fontSize: 13 }}>{ruleError}</p>}
               <button type="submit" disabled={creatingRule}>
                 {creatingRule ? "Adding..." : "Add rule"}
               </button>
-              <button type="button" className="secondary" onClick={() => setShowNewRule(false)}>
+              <button type="button" className="secondary" onClick={resetRuleForm}>
                 Cancel
               </button>
             </form>

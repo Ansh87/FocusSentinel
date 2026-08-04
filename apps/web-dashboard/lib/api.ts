@@ -60,6 +60,9 @@ export const api = {
   listExtensionRequests: (studentId: string, status?: string) =>
     request(`/extension-requests?student_id=${studentId}${status ? `&status=${status}` : ""}`),
   deviceHealth: (studentId: string) => request(`/device-health?student_id=${studentId}`),
+  websitesCatalog: (familyId: string) => request(`/websites/catalog?family_id=${familyId}`),
+  addWebsite: (payload: Record<string, unknown>) =>
+    request("/websites", { method: "POST", body: JSON.stringify(payload) }),
   auditLog: (familyId: string) => request(`/audit-log?family_id=${familyId}`),
   loadDemo: () => request("/demo/load", { method: "POST" }),
   resetDemo: () => request("/demo/reset", { method: "POST" }),

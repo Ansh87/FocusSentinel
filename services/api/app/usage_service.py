@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from activity_classifier import classify_domain
@@ -52,24 +53,59 @@ def _to_domain_rule(row: models.ScreenTimeRule) -> Rule:
     )
 
 
-def resolve_category_and_website(db: Session, family_id: str, identifier: str) -> tuple[str | None, str | None]:
-    """Returns (category_id, website_id) for a domain identifier, checking the
-    family's own website table first, then the global catalog."""
-    website = (
-        db.query(models.Website)
-        .filter(models.Website.family_id == family_id, models.Website.domain == identifier)
-        .first()
-    )
-    if website is None:
-        website = (
-            db.query(models.Website)
-            .filter(models.Website.family_id.is_(None), models.Website.domain == identifier)
-            .first()
-        )
-    if website:
-        return website.category_id, website.id
+def split_identifier(identifier: str) -> tuple[str, str]:
+    """The extension (and the fallback catalog classifier) send identifiers
+    that are either a bare hostname ("tiktok.com") or a hostname plus a path
+    prefix with no separator marker other than the "/" a domain can never
+    contain ("youtube.com/shorts"). Splitting on the first "/" recovers both
+    parts losslessly."""
+    hostname, _, rest = identifier.partition("/")
+    path = f"/{rest}" if rest else ""
+    return hostname.lower().removeprefix("www."), path
 
-    catalog_entry = classify_domain(identifier)
+
+def resolve_category_and_website(db: Session, family_id: str, identifier: str) -> tuple[str | None, str | None]:
+    """Returns (category_id, website_id) for a tracked identifier, matching
+    against the family's own custom websites plus the global catalog stored
+    in the `websites` table. Uses longest-match-wins between a domain-only
+    row and a more specific url_pattern row (e.g. youtube.com vs
+    youtube.com/shorts), mirroring activity_classifier.classify_domain's
+    semantics but against the live, family-extensible table instead of the
+    static code catalog — this is what lets a custom "Khan Academy Videos"
+    website resolve just as precisely as a built-in one, and is also what
+    makes a multi-website rule's individual sites distinguishable from each
+    other for combined-usage aggregation (see seconds_today_for_rule)."""
+    hostname, path = split_identifier(identifier)
+
+    candidates = (
+        db.query(models.Website)
+        .filter(
+            models.Website.domain == hostname,
+            (models.Website.family_id == family_id) | (models.Website.family_id.is_(None)),
+        )
+        .all()
+    )
+    best = None
+    best_specificity = -1
+    for w in candidates:
+        if w.url_pattern:
+            if not path.startswith(w.url_pattern):
+                continue
+            specificity = len(w.url_pattern)
+        else:
+            specificity = 0
+        # Longest url_pattern wins; ties (including two domain-only rows)
+        # prefer the family's own entry over the shared global catalog one.
+        is_family = w.family_id is not None
+        if specificity > best_specificity or (specificity == best_specificity and is_family and best is not None and best.family_id is None):
+            best, best_specificity = w, specificity
+    if best:
+        return best.category_id, best.id
+
+    # Fallback to the static code catalog — covers environments where the
+    # `websites` table hasn't been seeded yet. Never resolves a website_id
+    # here (there's no row to point to), only a category.
+    catalog_entry = classify_domain(hostname, path)
     if catalog_entry:
         category = db.query(models.ActivityCategory).filter_by(key=catalog_entry.category).first()
         return (category.id if category else None), None
@@ -77,8 +113,19 @@ def resolve_category_and_website(db: Session, family_id: str, identifier: str) -
 
 
 def find_active_rule(db: Session, student: models.Student, category_id: str | None, website_id: str | None):
+    """Most-specific-match-wins rule lookup: a rule whose explicit website
+    set includes this exact site outranks a rule merely scoped to the
+    site's category, which outranks nothing. This is also what prevents
+    double counting — exactly one rule is ever chosen per evaluation."""
     query = db.query(models.ScreenTimeRule).filter_by(student_id=student.id, active=True)
     if website_id:
+        rule = (
+            query.join(models.RuleWebsite, models.RuleWebsite.rule_id == models.ScreenTimeRule.id)
+            .filter(models.RuleWebsite.website_id == website_id)
+            .first()
+        )
+        if rule:
+            return rule
         rule = query.filter(models.ScreenTimeRule.scope_website_id == website_id).first()
         if rule:
             return rule
@@ -87,6 +134,41 @@ def find_active_rule(db: Session, student: models.Student, category_id: str | No
         if rule:
             return rule
     return None
+
+
+def seconds_today_for_rule(db: Session, student_id: str, usage_date: str, rule: models.ScreenTimeRule) -> int:
+    """The combined total across whatever this rule actually covers today —
+    every website in its multi-select set, or its whole category, or its
+    single legacy scope_website_id — so a limit shared across TikTok +
+    YouTube Shorts + Instagram Reels is evaluated against their *sum*, not
+    each site's total in isolation."""
+    website_ids = [rw.website_id for rw in db.query(models.RuleWebsite).filter_by(rule_id=rule.id).all()]
+    if website_ids:
+        total = (
+            db.query(func.sum(models.DailyUsageTotal.total_seconds))
+            .filter(
+                models.DailyUsageTotal.student_id == student_id,
+                models.DailyUsageTotal.usage_date == usage_date,
+                models.DailyUsageTotal.website_id.in_(website_ids),
+            )
+            .scalar()
+        )
+        return total or 0
+    if rule.scope_website_id:
+        total = (
+            db.query(func.sum(models.DailyUsageTotal.total_seconds))
+            .filter_by(student_id=student_id, usage_date=usage_date, website_id=rule.scope_website_id)
+            .scalar()
+        )
+        return total or 0
+    if rule.scope_category_id:
+        total = (
+            db.query(func.sum(models.DailyUsageTotal.total_seconds))
+            .filter_by(student_id=student_id, usage_date=usage_date, category_id=rule.scope_category_id)
+            .scalar()
+        )
+        return total or 0
+    return 0
 
 
 def _local_today(student: models.Student) -> str:

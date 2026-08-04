@@ -13,12 +13,33 @@ def _to_rule_out(db: Session, rule: models.ScreenTimeRule) -> schemas.RuleOut:
     if rule.scope_category_id:
         category = db.get(models.ActivityCategory, rule.scope_category_id)
         category_key = category.key if category else None
+
+    website_ids = [rw.website_id for rw in db.query(models.RuleWebsite).filter_by(rule_id=rule.id).all()]
+    if rule.scope_website_id and rule.scope_website_id not in website_ids:
+        website_ids.append(rule.scope_website_id)
+    websites = []
+    if website_ids:
+        rows = db.query(models.Website).filter(models.Website.id.in_(website_ids)).all()
+        websites = [
+            schemas.WebsiteOut(
+                id=w.id,
+                domain=w.domain,
+                url_pattern=w.url_pattern,
+                label=w.label,
+                category_id=w.category_id,
+                source=w.source,
+                is_custom=w.family_id is not None,
+            )
+            for w in rows
+        ]
+
     return schemas.RuleOut(
         id=rule.id,
         student_id=rule.student_id,
         name=rule.name,
         scope_type=rule.scope_type,
         scope_category_key=category_key,
+        websites=websites,
         daily_limit_minutes=rule.daily_limit_minutes,
         warning_one_at_minutes=rule.warning_one_at_minutes,
         warning_two_after_additional_minutes=rule.warning_two_after_additional_minutes,
@@ -42,6 +63,17 @@ def create_rule(payload: schemas.RuleCreate, db: Session = Depends(get_db), user
             raise HTTPException(400, f"Unknown category key: {payload.scope_category_key}")
         category_id = category.id
 
+    websites = []
+    if payload.website_ids:
+        websites = db.query(models.Website).filter(models.Website.id.in_(payload.website_ids)).all()
+        found_ids = {w.id for w in websites}
+        missing = set(payload.website_ids) - found_ids
+        if missing:
+            raise HTTPException(400, f"Unknown website id(s): {', '.join(sorted(missing))}")
+        not_visible = [w.id for w in websites if w.family_id is not None and w.family_id != student.family_id]
+        if not_visible:
+            raise HTTPException(403, "One or more selected websites do not belong to this family")
+
     rule = models.ScreenTimeRule(
         family_id=student.family_id,
         student_id=student.id,
@@ -63,6 +95,8 @@ def create_rule(payload: schemas.RuleCreate, db: Session = Depends(get_db), user
     )
     db.add(rule)
     db.flush()
+    for website in websites:
+        db.add(models.RuleWebsite(rule_id=rule.id, website_id=website.id))
     db.add(
         models.AuditLog(
             family_id=student.family_id,
@@ -71,7 +105,11 @@ def create_rule(payload: schemas.RuleCreate, db: Session = Depends(get_db), user
             action="rule.created",
             target_type="screen_time_rule",
             target_id=rule.id,
-            event_metadata={"name": rule.name, "daily_limit_minutes": rule.daily_limit_minutes},
+            event_metadata={
+                "name": rule.name,
+                "daily_limit_minutes": rule.daily_limit_minutes,
+                "website_ids": [w.id for w in websites],
+            },
         )
     )
     db.commit()
@@ -84,7 +122,28 @@ def update_rule(rule_id: str, payload: schemas.RuleUpdate, db: Session = Depends
     rule = db.get(models.ScreenTimeRule, rule_id)
     if not rule:
         raise HTTPException(404, "Rule not found")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+
+    fields = payload.model_dump(exclude_unset=True)
+    website_ids = fields.pop("website_ids", None)
+    if website_ids is not None:
+        # website_ids isn't a plain column on ScreenTimeRule — it's a
+        # separate join table — so it's handled here instead of via the
+        # generic setattr loop below, by replacing the rule's full website
+        # set (delete-then-recreate is simplest and safe since RuleWebsite
+        # carries no independent state of its own).
+        websites = db.query(models.Website).filter(models.Website.id.in_(website_ids)).all()
+        found_ids = {w.id for w in websites}
+        missing = set(website_ids) - found_ids
+        if missing:
+            raise HTTPException(400, f"Unknown website id(s): {', '.join(sorted(missing))}")
+        not_visible = [w.id for w in websites if w.family_id is not None and w.family_id != rule.family_id]
+        if not_visible:
+            raise HTTPException(403, "One or more selected websites do not belong to this family")
+        db.query(models.RuleWebsite).filter_by(rule_id=rule.id).delete()
+        for website in websites:
+            db.add(models.RuleWebsite(rule_id=rule.id, website_id=website.id))
+
+    for field, value in fields.items():
         setattr(rule, field, value)
     db.add(
         models.AuditLog(

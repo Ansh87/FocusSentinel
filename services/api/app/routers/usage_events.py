@@ -7,7 +7,13 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
 from ..deps import get_current_device
-from ..usage_service import evaluate_and_persist, resolve_category_and_website, upsert_daily_total
+from ..usage_service import (
+    evaluate_and_persist,
+    find_active_rule,
+    resolve_category_and_website,
+    seconds_today_for_rule,
+    upsert_daily_total,
+)
 
 router = APIRouter(prefix="/usage-events", tags=["usage-events"])
 
@@ -73,12 +79,23 @@ def submit_usage_events(
         # bucketed by the *event's* local calendar day so offline-queued
         # events synced later still land in the correct day's total.
         usage_date = info["usage_date"]
-        running_total = (
-            db.query(models.DailyUsageTotal)
-            .filter_by(student_id=student.id, usage_date=usage_date, category_id=category_id, application_id=None, website_id=website_id)
-            .first()
-        )
-        seconds_today = running_total.total_seconds if running_total else info["seconds"]
+        rule_row = find_active_rule(db, student, category_id, website_id)
+        if rule_row is not None:
+            # A rule may span several selected websites sharing one daily
+            # limit (e.g. TikTok + YouTube Shorts + Instagram Reels), so the
+            # figure evaluated against the limit is the *combined* total
+            # across everything the rule covers today, not just this one
+            # site's total — otherwise splitting time between sites would
+            # let a student stay under the limit on paper while blowing
+            # past it in aggregate.
+            seconds_today = seconds_today_for_rule(db, student.id, usage_date, rule_row)
+        else:
+            running_total = (
+                db.query(models.DailyUsageTotal)
+                .filter_by(student_id=student.id, usage_date=usage_date, category_id=category_id, application_id=None, website_id=website_id)
+                .first()
+            )
+            seconds_today = running_total.total_seconds if running_total else info["seconds"]
         result = evaluate_and_persist(db, student, device, info["identifier"], category_id, website_id, seconds_today, usage_date=usage_date)
         evaluations.append(schemas.EvaluationOut(**result))
 

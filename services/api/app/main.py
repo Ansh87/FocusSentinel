@@ -15,6 +15,7 @@ from .routers import (
     rules,
     students,
     usage_events,
+    websites,
 )
 
 # For this Phase 1 build, SQLAlchemy's create_all is the actual schema source
@@ -46,6 +47,7 @@ app.include_router(students.router)
 app.include_router(devices.router)
 app.include_router(usage_events.router)
 app.include_router(rules.router)
+app.include_router(websites.router)
 app.include_router(extension_requests.router)
 app.include_router(notification_recipients.router)
 app.include_router(device_health.router)

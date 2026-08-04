@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
 from ..deps import get_current_user, require_parent
+from ..usage_service import seconds_today_for_rule
 
 router = APIRouter(prefix="/students", tags=["students"])
 
@@ -59,6 +60,16 @@ def usage_today(student_id: str, db: Session = Depends(get_db), user: models.Use
         key = cat.key if cat else "uncategorized"
         by_category[key] = by_category.get(key, 0) + t.total_seconds
 
+    # Computed the same way the rules engine evaluates each rule — combined
+    # across every website a multi-website rule covers — so the dashboard's
+    # progress bars are correct for both legacy category/single-website rules
+    # and the new multi-website ones without duplicating matching logic in
+    # the frontend.
+    by_rule: dict[str, int] = {}
+    active_rules = db.query(models.ScreenTimeRule).filter_by(student_id=student_id, active=True).all()
+    for rule in active_rules:
+        by_rule[rule.id] = seconds_today_for_rule(db, student_id, today, rule)
+
     day_start = datetime.fromisoformat(today)
     day_end = day_start + timedelta(days=1)
     warnings = (
@@ -76,6 +87,7 @@ def usage_today(student_id: str, db: Session = Depends(get_db), user: models.Use
         student_id=student_id,
         date=today,
         total_seconds_by_category=by_category,
+        total_seconds_by_rule=by_rule,
         active_warnings=[{"rule_id": w.rule_id, "level": w.level, "minutes_used": w.minutes_used} for w in warnings],
         active_restrictions=[{"rule_id": r.rule_id, "reason": r.reason, "scheduled_reset_at": r.scheduled_reset_at.isoformat()} for r in restrictions],
     )

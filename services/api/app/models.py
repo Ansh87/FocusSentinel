@@ -128,6 +128,20 @@ class Website(Base):
     source: Mapped[str] = mapped_column(String, default="catalog")
 
 
+class RuleWebsite(Base):
+    """Join table letting one rule share a single daily limit across several
+    selected websites (e.g. TikTok + YouTube Shorts + Instagram Reels all
+    counted together). A brand new table — safe to add via
+    `Base.metadata.create_all` without an ALTER TABLE against the already
+    deployed `screen_time_rules`/`websites` tables."""
+
+    __tablename__ = "rule_websites"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_id)
+    rule_id: Mapped[str] = mapped_column(String(36), ForeignKey("screen_time_rules.id"))
+    website_id: Mapped[str] = mapped_column(String(36), ForeignKey("websites.id"))
+    __table_args__ = (UniqueConstraint("rule_id", "website_id"),)
+
+
 class ScreenTimeRule(Base):
     __tablename__ = "screen_time_rules"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_id)

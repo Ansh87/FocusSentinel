@@ -72,6 +72,26 @@ class DeviceHeartbeat(BaseModel):
     permissions: dict[str, bool] = {}
 
 
+# ---- Websites ----
+class WebsiteOut(BaseModel):
+    id: str
+    domain: str
+    url_pattern: Optional[str] = None
+    label: str
+    category_id: Optional[str] = None
+    source: str
+    is_custom: bool = False
+    model_config = {"from_attributes": True}
+
+
+class WebsiteCreate(BaseModel):
+    family_id: str
+    domain: str
+    label: str
+    url_pattern: Optional[str] = None
+    category_key: Optional[str] = None
+
+
 # ---- Rules ----
 class RuleCreate(BaseModel):
     student_id: str
@@ -81,6 +101,7 @@ class RuleCreate(BaseModel):
     scope_application_id: Optional[str] = None
     scope_website_id: Optional[str] = None
     scope_device_id: Optional[str] = None
+    website_ids: list[str] = Field(default_factory=list)
     days_of_week: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4, 5, 6])
     allowed_start: Optional[str] = None  # "HH:MM"
     allowed_end: Optional[str] = None
@@ -94,6 +115,7 @@ class RuleCreate(BaseModel):
 
 class RuleUpdate(BaseModel):
     name: Optional[str] = None
+    website_ids: Optional[list[str]] = None
     days_of_week: Optional[list[int]] = None
     allowed_start: Optional[str] = None
     allowed_end: Optional[str] = None
@@ -101,6 +123,7 @@ class RuleUpdate(BaseModel):
     warning_one_at_minutes: Optional[int] = None
     warning_two_after_additional_minutes: Optional[int] = None
     block_after_warning_two_seconds: Optional[int] = None
+    reset_time: Optional[str] = None
     active: Optional[bool] = None
 
 
@@ -110,6 +133,7 @@ class RuleOut(BaseModel):
     name: str
     scope_type: str
     scope_category_key: Optional[str] = None
+    websites: list[WebsiteOut] = Field(default_factory=list)
     daily_limit_minutes: Optional[int]
     warning_one_at_minutes: int
     warning_two_after_additional_minutes: Optional[int] = None
@@ -156,6 +180,7 @@ class TodayUsageOut(BaseModel):
     student_id: str
     date: str
     total_seconds_by_category: dict[str, int]
+    total_seconds_by_rule: dict[str, int] = Field(default_factory=dict)
     active_warnings: list[dict]
     active_restrictions: list[dict]
 
