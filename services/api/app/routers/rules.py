@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import models, schemas
+from .. import models, schemas, setup_status
 from ..database import get_db
 from ..deps import ensure_can_manage_student, ensure_own_student_or_parent, get_current_user
 
@@ -114,6 +114,7 @@ def create_rule(payload: schemas.RuleCreate, db: Session = Depends(get_db), user
             },
         )
     )
+    setup_status.mark_completed_if_ready(db, student.family_id)
     db.commit()
     db.refresh(rule)
     return _to_rule_out(db, rule)

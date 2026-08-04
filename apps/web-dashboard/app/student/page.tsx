@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, clearToken } from "../../lib/api";
+import { useRequireAuth } from "../../lib/useRequireAuth";
 import { Header } from "../../components/Header";
 
 const CATEGORY_OPTIONS = [
@@ -38,6 +39,7 @@ function ruleDisplayLabel(rule: any) {
 
 export default function StudentPage() {
   const router = useRouter();
+  const authOk = useRequireAuth();
   const [student, setStudent] = useState<{ id: string; display_name: string; family_id: string; is_sibling_manager?: boolean; sibling_manager_until?: string | null } | null>(null);
   const [usage, setUsage] = useState<any | null>(null);
   const [rules, setRules] = useState<any[]>([]);
@@ -185,6 +187,8 @@ export default function StudentPage() {
       setSubmitting(false);
     }
   }
+
+  if (!authOk) return null;
 
   if (loaded && !student) {
     return (

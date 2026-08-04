@@ -55,6 +55,11 @@ export const api = {
   createFamily: (name: string, timezone: string) =>
     request("/families", { method: "POST", body: JSON.stringify({ name, timezone }) }),
   myFamilies: () => request("/families/mine"),
+  updateFamily: (familyId: string, payload: { name?: string; timezone?: string }) =>
+    request(`/families/${familyId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  getSetupStatus: (familyId: string) => request(`/families/${familyId}/setup-status`),
+  dismissSetupReminder: (familyId: string) => request(`/families/${familyId}/setup-status/dismiss-reminder`, { method: "POST" }),
+  skipDeviceSetup: (familyId: string) => request(`/families/${familyId}/setup-status/skip-device`, { method: "POST" }),
   createStudent: (family_id: string, display_name: string, age_range: string, timezone: string) =>
     request("/students", { method: "POST", body: JSON.stringify({ family_id, display_name, age_range, timezone }) }),
   listStudents: (familyId: string) => request(`/students/family/${familyId}`),

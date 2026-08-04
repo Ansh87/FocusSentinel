@@ -90,6 +90,7 @@ def delete_family(db: Session, family_id: str) -> None:
     student_ids = [s.id for s in db.query(models.Student).filter_by(family_id=family_id).all()]
     delete_students(db, student_ids)
     db.query(models.SiblingManagerGrant).filter_by(family_id=family_id).delete(synchronize_session=False)
+    db.query(models.FamilyOnboardingState).filter_by(family_id=family_id).delete(synchronize_session=False)
     db.query(models.NotificationEvent).filter_by(family_id=family_id).delete(synchronize_session=False)
     db.query(models.NotificationRecipient).filter_by(family_id=family_id).delete(synchronize_session=False)
     db.query(models.AuditLog).filter_by(family_id=family_id).delete(synchronize_session=False)

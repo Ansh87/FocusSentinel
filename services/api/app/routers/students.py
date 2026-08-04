@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import cascade, models, schemas
+from .. import cascade, models, schemas, setup_status
 from ..database import get_db
 from ..deps import active_sibling_grant, ensure_own_student_or_parent, get_current_user, require_parent
 from ..security import hash_password
@@ -51,6 +51,7 @@ def create_student(payload: schemas.StudentCreate, db: Session = Depends(get_db)
             target_id=student.id,
         )
     )
+    setup_status.mark_completed_if_ready(db, payload.family_id)
     db.commit()
     db.refresh(student)
     return student

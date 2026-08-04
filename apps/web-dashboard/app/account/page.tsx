@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, clearToken } from "../../lib/api";
+import { useRequireAuth } from "../../lib/useRequireAuth";
 import { Header } from "../../components/Header";
 
 export default function AccountPage() {
   const router = useRouter();
+  const authOk = useRequireAuth();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -67,6 +69,8 @@ export default function AccountPage() {
       setBusy(false);
     }
   }
+
+  if (!authOk) return null;
 
   return (
     <>

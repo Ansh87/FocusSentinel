@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, clearToken, isDemoFamily } from "../../lib/api";
+import { useRequireAuth } from "../../lib/useRequireAuth";
 import { Header } from "../../components/Header";
 
 type Student = { id: string; display_name: string; family_id: string; is_sibling_manager?: boolean; sibling_manager_until?: string | null };
@@ -399,6 +400,7 @@ function RuleFormModal({
 
 export default function DashboardPage() {
   const router = useRouter();
+  const authOk = useRequireAuth();
   const [families, setFamilies] = useState<{ id: string; name: string }[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [selectedView, setSelectedView] = useState<string>("");
@@ -429,10 +431,8 @@ export default function DashboardPage() {
   const [customAmounts, setCustomAmounts] = useState<Record<string, string>>({});
   const [allowMoreTimeFor, setAllowMoreTimeFor] = useState<string | null>(null);
 
-  const [obStudentName, setObStudentName] = useState("");
-  const [obAgeRange, setObAgeRange] = useState(AGE_RANGES[2].key);
-  const [obBusy, setObBusy] = useState(false);
-  const [obError, setObError] = useState<string | null>(null);
+  const [setupStatus, setSetupStatus] = useState<any | null>(null);
+  const [reminderHidden, setReminderHidden] = useState(false);
 
   const [allSummary, setAllSummary] = useState<Record<string, { restricted: boolean; rulesCount: number }>>({});
   const [allSummaryLoading, setAllSummaryLoading] = useState(false);
@@ -626,21 +626,27 @@ export default function DashboardPage() {
     }
   }
 
-  async function handleOnboard(e: React.FormEvent) {
-    e.preventDefault();
-    if (!obStudentName.trim()) return;
-    setObBusy(true);
-    setObError(null);
+  useEffect(() => {
+    if (!families[0]?.id) {
+      setSetupStatus(null);
+      return;
+    }
+    api
+      .getSetupStatus(families[0].id)
+      .then(setSetupStatus)
+      .catch(() => {
+        /* non-fatal -- the setup banner just won't show */
+      });
+  }, [families, students, rules]);
+
+  async function handleDismissReminder() {
+    if (!families[0]?.id) return;
+    setReminderHidden(true);
     try {
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-      const family = await api.createFamily("My Family", tz);
-      await api.createStudent(family.id, obStudentName.trim(), obAgeRange, tz);
-      setObStudentName("");
-      await loadFamilies();
-    } catch (e: any) {
-      setObError(e.message || "Could not set up your family.");
-    } finally {
-      setObBusy(false);
+      const status = await api.dismissSetupReminder(families[0].id);
+      setSetupStatus(status);
+    } catch {
+      /* the banner already hid locally either way */
     }
   }
 
@@ -897,6 +903,8 @@ export default function DashboardPage() {
     router.push("/");
   }
 
+  if (!authOk) return null;
+
   if (error) {
     return (
       <div className="container">
@@ -906,6 +914,10 @@ export default function DashboardPage() {
     );
   }
 
+  const setupReminderDismissed =
+    reminderHidden ||
+    !!(setupStatus?.reminder_dismissed_until && new Date(setupStatus.reminder_dismissed_until) > new Date());
+
   return (
     <>
       <Header
@@ -913,6 +925,7 @@ export default function DashboardPage() {
         right={
           <>
             <a href="/dashboard/activity">Activity</a>
+            {setupStatus && !setupStatus.is_complete && <a href="/setup">Complete Setup</a>}
             <a href="/account">Account</a>
             <a onClick={signOut} style={{ cursor: "pointer" }}>
               Sign out
@@ -926,47 +939,58 @@ export default function DashboardPage() {
         {familiesLoaded && families.length === 0 ? (
           <div className="card">
             <h2>Welcome to FocusSentinel</h2>
-            <p className="muted">Set up your family to begin managing healthier screen-time habits.</p>
-            <ul className="checklist">
-              <li>
-                <span className="check-dot done">✓</span> Create your account
-              </li>
-              <li>
-                <span className="check-dot">2</span> Add your first student
-              </li>
-            </ul>
-            <form onSubmit={handleOnboard} style={{ marginTop: 8 }}>
-              <label htmlFor="ob-name">Student's name</label>
-              <input id="ob-name" value={obStudentName} onChange={(e) => setObStudentName(e.target.value)} required />
-              <label htmlFor="ob-age">Age range</label>
-              <select id="ob-age" value={obAgeRange} onChange={(e) => setObAgeRange(e.target.value)}>
-                {AGE_RANGES.map((a) => (
-                  <option key={a.key} value={a.key}>
-                    {a.label}
-                  </option>
-                ))}
-              </select>
-              {obError && <p style={{ color: "#991b1b", fontSize: 13 }}>{obError}</p>}
-              <button type="submit" disabled={obBusy}>
-                {obBusy ? "Setting up..." : "Add your first student"}
-              </button>
-            </form>
-            <p className="muted" style={{ fontSize: 12, marginTop: 12 }}>
-              Once your student is added, you can create screen-time rules and connect a device from the dashboard below.
+            <p className="muted">
+              Let's set up your family's digital-wellbeing plan. A short guided setup walks you through your family
+              profile, your first student, the websites you want to manage, and your first screen-time rule.
             </p>
+            <button onClick={() => router.push("/setup")}>Start guided setup</button>
             <div style={{ borderTop: "1px solid var(--border)", marginTop: 16, paddingTop: 16 }}>
               <button className="secondary" onClick={handleLoadDemo} disabled={demoBusy}>
                 {demoBusy ? "Loading..." : "Explore with sample data instead"}
               </button>
+              <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                Opens a separate sample family so you can see FocusSentinel in action -- it never touches your own
+                family's data.
+              </p>
             </div>
           </div>
         ) : (
           <>
+            {setupStatus && !setupStatus.is_complete && !setupReminderDismissed && (
+              <div className="card" style={{ borderColor: "var(--accent)" }}>
+                <h2>Complete your FocusSentinel setup</h2>
+                <p className="muted" style={{ marginTop: -6 }}>
+                  You've completed {setupStatus.completed_steps} of {setupStatus.total_steps} steps.
+                </p>
+                {setupStatus.remaining_steps.length > 0 && (
+                  <ul style={{ margin: "0 0 12px", paddingLeft: 20, fontSize: 14 }}>
+                    {setupStatus.remaining_steps.map((s: string) => (
+                      <li key={s}>{s}</li>
+                    ))}
+                  </ul>
+                )}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => router.push("/setup")}>Continue Setup</button>
+                  <button className="secondary" onClick={handleDismissReminder}>
+                    Remind Me Later
+                  </button>
+                </div>
+              </div>
+            )}
+
             <p className="muted" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span>
                 {families[0]?.name || "Your family"} · {students.length} student{students.length === 1 ? "" : "s"}
               </span>
               {isDemoFamily(families[0]?.name) && <span className="badge none">Demo · sample data</span>}
+              {setupStatus && !setupStatus.is_complete && setupReminderDismissed && (
+                <a
+                  onClick={() => router.push("/setup")}
+                  style={{ cursor: "pointer", fontSize: 13, color: "var(--warn)" }}
+                >
+                  Setup incomplete · {setupStatus.completed_steps} of {setupStatus.total_steps} steps
+                </a>
+              )}
               {isDemoFamily(families[0]?.name) && (
                 <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
                   <button className="secondary" onClick={handleSimulate} disabled={simBusy || demoBusy}>

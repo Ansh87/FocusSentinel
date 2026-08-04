@@ -308,6 +308,25 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class FamilyOnboardingState(Base):
+    """Tracks the one-time first-setup wizard for a family: when it was
+    started, when it was finished, and whether the parent explicitly
+    dismissed the dashboard reminder banner or skipped device connection.
+    Everything else about "setup progress" (has a student, has a rule, has a
+    device) is deliberately NOT duplicated here -- it's derived live from the
+    real Student/ScreenTimeRule/Device rows in setup_status_for_family()
+    (services/api/app/setup_status.py), so this table can never drift out of
+    sync with what the family actually has. A brand-new table, additive and
+    safe via `Base.metadata.create_all`."""
+
+    __tablename__ = "family_onboarding_state"
+    family_id: Mapped[str] = mapped_column(String(36), ForeignKey("families.id"), primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    device_connect_skipped: Mapped[bool] = mapped_column(Boolean, default=False)
+    reminder_dismissed_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class SiblingManagerGrant(Base):
     """Lets a parent authorize one student (typically the eldest sibling) to
     manage screen-time rules and approve/deny extension requests for the

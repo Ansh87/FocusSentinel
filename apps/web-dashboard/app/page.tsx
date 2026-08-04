@@ -23,6 +23,16 @@ export default function LoginPage() {
   const [forgotBusy, setForgotBusy] = useState(false);
   const [forgotSent, setForgotSent] = useState(false);
 
+  // Read directly off window.location rather than next/navigation's
+  // useSearchParams(), which requires wrapping this page in a Suspense
+  // boundary -- not worth the restructuring for one query flag.
+  const [sessionExpired, setSessionExpired] = useState(false);
+  useEffect(() => {
+    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("expired") === "1") {
+      setSessionExpired(true);
+    }
+  }, []);
+
   // If there's already a valid session (e.g. someone bookmarked "/", hit
   // back, or landed here after the brand link used to send signed-in users
   // to login by mistake), skip the form and go straight to their dashboard.
@@ -116,6 +126,12 @@ export default function LoginPage() {
         <p className="muted">
           Set healthy limits, track active use, and support balanced technology habits.
         </p>
+
+        {sessionExpired && (
+          <p style={{ color: "#991b1b", background: "#fee2e2", padding: "10px 14px", borderRadius: 8, fontSize: 14 }}>
+            Your session has expired. Please sign in again.
+          </p>
+        )}
 
         <div className="card">
           <button

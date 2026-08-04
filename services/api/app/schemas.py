@@ -56,11 +56,32 @@ class FamilyCreate(BaseModel):
     timezone: str = "UTC"
 
 
+class FamilyUpdate(BaseModel):
+    name: Optional[str] = None
+    timezone: Optional[str] = None
+
+
 class FamilyOut(BaseModel):
     id: str
     name: str
     timezone: str
     model_config = {"from_attributes": True}
+
+
+class SetupStatusOut(BaseModel):
+    family_id: str
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    family_profile_completed: bool
+    student_added: bool
+    first_rule_created: bool
+    device_connected: bool
+    device_connect_skipped: bool
+    completed_steps: int
+    total_steps: int
+    is_complete: bool
+    remaining_steps: list[str]
+    reminder_dismissed_until: Optional[datetime] = None
 
 
 class StudentCreate(BaseModel):

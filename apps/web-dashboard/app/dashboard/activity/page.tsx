@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, clearToken } from "../../../lib/api";
+import { useRequireAuth } from "../../../lib/useRequireAuth";
 import { Header } from "../../../components/Header";
 
 const CATEGORY_OPTIONS = [
@@ -26,6 +27,7 @@ const DAY_FILTERS = [7, 14, 30];
 
 export default function ActivityHistoryPage() {
   const router = useRouter();
+  const authOk = useRequireAuth();
   const [students, setStudents] = useState<{ id: string; display_name: string }[]>([]);
   const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
   const [days, setDays] = useState(7);
@@ -59,6 +61,8 @@ export default function ActivityHistoryPage() {
       .catch((e: any) => setError(e.message))
       .finally(() => setLoading(false));
   }, [selectedStudent, days]);
+
+  if (!authOk) return null;
 
   return (
     <>
