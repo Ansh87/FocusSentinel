@@ -1,7 +1,13 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
-export function Header({ active, right }: { active?: "about" | "dashboard"; right?: ReactNode }) {
+export function Header({
+  active,
+  right,
+}: {
+  active?: "about" | "dashboard" | "disclaimer";
+  right?: ReactNode;
+}) {
   return (
     <header className="site-header">
       <div className="container header-inner">
@@ -12,6 +18,9 @@ export function Header({ active, right }: { active?: "about" | "dashboard"; righ
         <nav className="site-nav">
           <Link href="/about" className={active === "about" ? "active" : ""}>
             About
+          </Link>
+          <Link href="/disclaimer" className={active === "disclaimer" ? "active" : ""}>
+            Disclaimer
           </Link>
           {right}
         </nav>
