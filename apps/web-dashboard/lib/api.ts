@@ -70,6 +70,17 @@ export const api = {
   loadDemo: () => request("/demo/load", { method: "POST" }),
   resetDemo: () => request("/demo/reset", { method: "POST" }),
   simulateActivity: () => request("/demo/simulate", { method: "POST" }),
+  myStudentProfile: () => request("/students/me"),
+  usageHistory: (studentId: string, days: number) => request(`/students/${studentId}/usage/history?days=${days}`),
+  getStudentLoginStatus: (studentId: string) => request(`/students/${studentId}/login`),
+  setStudentLogin: (studentId: string, email: string, password: string) =>
+    request(`/students/${studentId}/login`, { method: "POST", body: JSON.stringify({ email, password }) }),
+  changePassword: (current_password: string, new_password: string) =>
+    request("/auth/change-password", { method: "POST", body: JSON.stringify({ current_password, new_password }) }),
+  requestPasswordReset: (email: string) =>
+    request("/auth/request-password-reset", { method: "POST", body: JSON.stringify({ email }) }),
+  resetPassword: (token: string, new_password: string) =>
+    request("/auth/reset-password", { method: "POST", body: JSON.stringify({ token, new_password }) }),
 };
 
 export const DEMO_FAMILY_NAME = "Demo Family (Sample Data)";

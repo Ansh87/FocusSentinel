@@ -10,7 +10,7 @@ const DEMO_PASSWORD = "demo-password-123";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [mode, setMode] = useState<"closed" | "signin" | "signup">("closed");
+  const [mode, setMode] = useState<"closed" | "signin" | "signup" | "forgot">("closed");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -19,12 +19,32 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [demoLoading, setDemoLoading] = useState(false);
 
-  function switchMode(next: "signin" | "signup") {
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
+
+  function switchMode(next: "signin" | "signup" | "forgot") {
     setMode(next);
     setError(null);
     setEmail("");
     setPassword("");
     setDisplayName("");
+    setForgotSent(false);
+  }
+
+  async function handleForgotSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setForgotBusy(true);
+    try {
+      await api.requestPasswordReset(forgotEmail);
+      setForgotSent(true);
+    } catch {
+      // Deliberately shown the same way as success — the endpoint itself
+      // never reveals whether the email exists, and neither should this.
+      setForgotSent(true);
+    } finally {
+      setForgotBusy(false);
+    }
   }
 
   async function afterAuth(result: { access_token: string; role: string }) {
@@ -99,6 +119,26 @@ export default function LoginPage() {
                 Create an account
               </button>
             </div>
+          ) : mode === "forgot" ? (
+            <>
+              <h2>Reset your password</h2>
+              {forgotSent ? (
+                <p className="muted" style={{ fontSize: 13 }}>
+                  If that email has an account, we've queued a reset link to it. It'll expire in 30 minutes.
+                </p>
+              ) : (
+                <form onSubmit={handleForgotSubmit}>
+                  <label htmlFor="forgot-email">Email</label>
+                  <input id="forgot-email" value={forgotEmail} onChange={(e) => setForgotEmail(e.target.value)} type="email" required />
+                  <button type="submit" disabled={forgotBusy}>
+                    {forgotBusy ? "Sending..." : "Send reset link"}
+                  </button>
+                </form>
+              )}
+              <button type="button" className="secondary" style={{ marginTop: 8 }} onClick={() => switchMode("signin")}>
+                Back to sign in
+              </button>
+            </>
           ) : (
             <>
               <h2>{mode === "signin" ? "Sign in" : "Create your account"}</h2>
@@ -139,6 +179,10 @@ export default function LoginPage() {
                     New here?{" "}
                     <a onClick={() => switchMode("signup")} style={{ cursor: "pointer", color: "var(--accent)" }}>
                       Create an account
+                    </a>
+                    {" · "}
+                    <a onClick={() => switchMode("forgot")} style={{ cursor: "pointer", color: "var(--accent)" }}>
+                      Forgot password?
                     </a>
                   </>
                 ) : (

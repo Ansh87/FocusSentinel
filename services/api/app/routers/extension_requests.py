@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_db
-from ..deps import get_current_user, require_parent
+from ..deps import ensure_own_student_or_parent, get_current_user, require_parent
 from ..notifications import enqueue_notification
 
 router = APIRouter(prefix="/extension-requests", tags=["extension-requests"])
@@ -13,6 +13,7 @@ router = APIRouter(prefix="/extension-requests", tags=["extension-requests"])
 
 @router.get("", response_model=list[schemas.ExtensionRequestOut])
 def list_extension_requests(student_id: str, status: str | None = None, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    ensure_own_student_or_parent(db, user, student_id)
     query = db.query(models.ExtensionRequest).filter_by(student_id=student_id)
     if status:
         query = query.filter_by(status=status)
@@ -21,6 +22,7 @@ def list_extension_requests(student_id: str, status: str | None = None, db: Sess
 
 @router.post("", response_model=schemas.ExtensionRequestOut, status_code=201)
 def create_extension_request(payload: schemas.ExtensionRequestCreate, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    ensure_own_student_or_parent(db, user, payload.student_id)
     student = db.get(models.Student, payload.student_id)
     if not student:
         raise HTTPException(404, "Student not found")

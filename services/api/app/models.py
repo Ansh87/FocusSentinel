@@ -275,6 +275,26 @@ class NotificationEvent(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class AccountEmailEvent(Base):
+    """Outbound email tied to a login account rather than a family (password
+    resets, and any future account-level mail) — deliberately a separate
+    table from `notification_events` rather than loosening that table's
+    existing NOT NULL `family_id`, since `Base.metadata.create_all` can add
+    new tables but can't ALTER a column already deployed to production. Read
+    and delivered by the same notification-worker service, via its own
+    lightweight poll query."""
+
+    __tablename__ = "account_email_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_id)
+    to_email: Mapped[str] = mapped_column(String, nullable=False)
+    event_type: Mapped[str] = mapped_column(String, nullable=False)
+    dedup_key: Mapped[str] = mapped_column(String, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="queued")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_id)

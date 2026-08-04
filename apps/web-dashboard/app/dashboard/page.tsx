@@ -295,6 +295,8 @@ function RuleFormModal({
                       textAlign: "left",
                       padding: "6px 10px",
                       background: "none",
+                      color: "var(--ink)",
+                      whiteSpace: "normal",
                       border: "none",
                       borderBottom: "1px solid var(--border)",
                       cursor: "pointer",
@@ -334,16 +336,16 @@ function RuleFormModal({
         <label htmlFor="rule-limit">Daily limit (minutes)</label>
         <input id="rule-limit" type="number" min={1} value={state.limit} onChange={(e) => setState((p) => ({ ...p, limit: e.target.value }))} />
 
-        <div style={{ display: "flex", gap: 8 }}>
-          <div style={{ flex: 1 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 130px" }}>
             <label htmlFor="rule-warn1">First warning at (min)</label>
             <input id="rule-warn1" type="number" min={1} value={state.warningOne} onChange={(e) => setState((p) => ({ ...p, warningOne: e.target.value }))} />
           </div>
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: "1 1 130px" }}>
             <label htmlFor="rule-warn2">2nd warning after (+min)</label>
             <input id="rule-warn2" type="number" min={0} value={state.warningTwoAfter} onChange={(e) => setState((p) => ({ ...p, warningTwoAfter: e.target.value }))} />
           </div>
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: "1 1 130px" }}>
             <label htmlFor="rule-grace">Grace period (sec)</label>
             <input id="rule-grace" type="number" min={0} value={state.blockAfterSeconds} onChange={(e) => setState((p) => ({ ...p, blockAfterSeconds: e.target.value }))} />
           </div>
@@ -434,6 +436,13 @@ export default function DashboardPage() {
 
   const [allSummary, setAllSummary] = useState<Record<string, { restricted: boolean; rulesCount: number }>>({});
   const [allSummaryLoading, setAllSummaryLoading] = useState(false);
+
+  const [studentLoginStatus, setStudentLoginStatus] = useState<{ has_login: boolean; email: string | null } | null>(null);
+  const [showStudentLoginForm, setShowStudentLoginForm] = useState(false);
+  const [studentLoginEmail, setStudentLoginEmail] = useState("");
+  const [studentLoginPassword, setStudentLoginPassword] = useState("");
+  const [studentLoginBusy, setStudentLoginBusy] = useState(false);
+  const [studentLoginError, setStudentLoginError] = useState<string | null>(null);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -546,6 +555,39 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedStudentId]);
+
+  useEffect(() => {
+    setShowStudentLoginForm(false);
+    setStudentLoginError(null);
+    if (!focusedStudentId) {
+      setStudentLoginStatus(null);
+      return;
+    }
+    api
+      .getStudentLoginStatus(focusedStudentId)
+      .then((status) => {
+        setStudentLoginStatus(status);
+        setStudentLoginEmail(status.email || "");
+      })
+      .catch(() => setStudentLoginStatus(null));
+  }, [focusedStudentId]);
+
+  async function handleSetStudentLogin(e: React.FormEvent) {
+    e.preventDefault();
+    if (!focusedStudentId) return;
+    setStudentLoginBusy(true);
+    setStudentLoginError(null);
+    try {
+      const status = await api.setStudentLogin(focusedStudentId, studentLoginEmail, studentLoginPassword);
+      setStudentLoginStatus(status);
+      setStudentLoginPassword("");
+      setShowStudentLoginForm(false);
+    } catch (e: any) {
+      setStudentLoginError(e.message || "Could not save this login.");
+    } finally {
+      setStudentLoginBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (selectedView !== "all" || students.length === 0) return;
@@ -773,9 +815,13 @@ export default function DashboardPage() {
       <Header
         active="dashboard"
         right={
-          <a onClick={signOut} style={{ cursor: "pointer" }}>
-            Sign out
-          </a>
+          <>
+            <a href="/dashboard/activity">Activity</a>
+            <a href="/account">Account</a>
+            <a onClick={signOut} style={{ cursor: "pointer" }}>
+              Sign out
+            </a>
+          </>
         }
       />
       <div className="container-wide">
@@ -1140,6 +1186,52 @@ export default function DashboardPage() {
                           </div>
                         )}
                       </div>
+                    )}
+                  </div>
+
+                  <div className="card">
+                    <h2>Student sign-in</h2>
+                    {studentLoginStatus?.has_login ? (
+                      <p className="muted" style={{ fontSize: 13 }}>
+                        {focusedStudent?.display_name} can sign in with <strong>{studentLoginStatus.email}</strong> to view their own
+                        usage and request more time.
+                      </p>
+                    ) : (
+                      <p className="muted" style={{ fontSize: 13 }}>
+                        {focusedStudent?.display_name} doesn't have a login yet — they can only be seen through this dashboard.
+                      </p>
+                    )}
+                    {!showStudentLoginForm ? (
+                      <button className="secondary" onClick={() => setShowStudentLoginForm(true)}>
+                        {studentLoginStatus?.has_login ? "Reset password" : "Create login"}
+                      </button>
+                    ) : (
+                      <form onSubmit={handleSetStudentLogin}>
+                        <label htmlFor="student-login-email">Email</label>
+                        <input
+                          id="student-login-email"
+                          type="email"
+                          required
+                          value={studentLoginEmail}
+                          onChange={(e) => setStudentLoginEmail(e.target.value)}
+                        />
+                        <label htmlFor="student-login-password">Password</label>
+                        <input
+                          id="student-login-password"
+                          type="password"
+                          required
+                          minLength={8}
+                          value={studentLoginPassword}
+                          onChange={(e) => setStudentLoginPassword(e.target.value)}
+                        />
+                        {studentLoginError && <p style={{ color: "#991b1b", fontSize: 13 }}>{studentLoginError}</p>}
+                        <button type="submit" disabled={studentLoginBusy}>
+                          {studentLoginBusy ? "Saving..." : "Save login"}
+                        </button>
+                        <button type="button" className="secondary" onClick={() => setShowStudentLoginForm(false)}>
+                          Cancel
+                        </button>
+                      </form>
                     )}
                   </div>
                 </div>

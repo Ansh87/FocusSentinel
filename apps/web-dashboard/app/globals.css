@@ -29,6 +29,14 @@ body {
   .dashboard-grid { grid-template-columns: 1fr; }
 }
 
+@media (max-width: 480px) {
+  .container, .container-wide { padding: 20px 14px; }
+  .card { padding: 14px; }
+  h1 { font-size: 20px; }
+  h2 { font-size: 15px; }
+  .header-inner { padding: 10px 14px; }
+}
+
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45);
   display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50;

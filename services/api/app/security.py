@@ -34,6 +34,17 @@ def create_refresh_token(subject: str) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
+def create_password_reset_token(subject: str) -> str:
+    """Short-lived, single-purpose token for the forgot-password flow. Its
+    `type` field is distinct from access/refresh tokens so it can never be
+    replayed as a login credential even if leaked, and it deliberately
+    excludes `role` since only account ownership (the subject) matters
+    here."""
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.password_reset_expire_minutes)
+    payload = {"sub": subject, "exp": expire, "type": "password_reset", "jti": secrets.token_hex(16)}
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
 def decode_token(token: str) -> dict | None:
     try:
         return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])

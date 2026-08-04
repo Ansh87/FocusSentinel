@@ -81,3 +81,36 @@ def enqueue_notification(
 
     db.flush()
     return created
+
+
+def enqueue_direct_email(db: Session, *, to_email: str, event_type: str, payload: dict, dedup_key: str | None = None) -> models.AccountEmailEvent:
+    """Queues an email that isn't tied to a family's NotificationRecipient
+    list — used for account-level mail like password resets, where the
+    recipient is a login email address, not a family contact. Lives in its
+    own `account_email_events` table (see the model's docstring) rather than
+    `notification_events`, whose `family_id` column is NOT NULL in the
+    already-deployed schema. Delivery still depends on a real email_provider
+    being configured for notification-worker — the 'console' default just
+    logs it, same as every other notification in this app."""
+    dedup_key = dedup_key or f"{event_type}:{to_email}"
+    cutoff = datetime.utcnow() - timedelta(minutes=DEDUP_COOLDOWN_MINUTES)
+    recent = (
+        db.query(models.AccountEmailEvent)
+        .filter(
+            models.AccountEmailEvent.dedup_key == dedup_key,
+            models.AccountEmailEvent.created_at >= cutoff,
+            models.AccountEmailEvent.status != "suppressed_dedup",
+        )
+        .first()
+    )
+    status = "suppressed_dedup" if recent else "queued"
+    event = models.AccountEmailEvent(
+        to_email=to_email,
+        event_type=event_type,
+        dedup_key=dedup_key,
+        payload=payload,
+        status=status,
+    )
+    db.add(event)
+    db.flush()
+    return event

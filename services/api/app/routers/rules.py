@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_db
-from ..deps import require_parent
+from ..deps import ensure_own_student_or_parent, get_current_user, require_parent
 
 router = APIRouter(prefix="/rules", tags=["rules"])
 
@@ -216,6 +216,7 @@ def delete_rule(rule_id: str, db: Session = Depends(get_db), user: models.User =
 
 
 @router.get("/student/{student_id}", response_model=list[schemas.RuleOut])
-def list_rules(student_id: str, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+def list_rules(student_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    ensure_own_student_or_parent(db, user, student_id)
     rules = db.query(models.ScreenTimeRule).filter_by(student_id=student_id).all()
     return [_to_rule_out(db, r) for r in rules]

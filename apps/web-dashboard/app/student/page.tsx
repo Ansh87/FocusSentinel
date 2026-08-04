@@ -3,141 +3,248 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, clearToken } from "../../lib/api";
+import { Header } from "../../components/Header";
 
-// Simplification for this build: a full student-invite flow (parent invites
-// a student email, student sets their own password, account gets linked to
-// the students.user_id column) is a small follow-up, not implemented here.
-// For now the student's own dashboard is addressed directly by student ID,
-// which a parent shares with them during onboarding.
+const CATEGORY_OPTIONS = [
+  { key: "short_form_video", label: "Short-form video" },
+  { key: "social_media", label: "Social media" },
+  { key: "games", label: "Games" },
+  { key: "entertainment_video", label: "Entertainment video" },
+  { key: "messaging", label: "Messaging" },
+  { key: "educational", label: "Educational" },
+  { key: "productivity", label: "Productivity" },
+  { key: "creative_work", label: "Creative work" },
+  { key: "reading_research", label: "Reading & research" },
+  { key: "other", label: "Other" },
+];
+
+const REASON_OPTIONS = [
+  { key: "friends", label: "Finishing up with friends" },
+  { key: "special_event", label: "Special event" },
+  { key: "school_related", label: "School-related" },
+  { key: "technical_issue", label: "Technical issue" },
+  { key: "other", label: "Other" },
+];
+
+function categoryLabel(key: string) {
+  return CATEGORY_OPTIONS.find((c) => c.key === key)?.label || key.replace(/_/g, " ");
+}
+
+function ruleDisplayLabel(rule: any) {
+  if (rule.websites && rule.websites.length > 0) return rule.websites.map((w: any) => w.label).join(" + ");
+  if (rule.scope_category_key) return categoryLabel(rule.scope_category_key);
+  return rule.name;
+}
 
 export default function StudentPage() {
   const router = useRouter();
-  const [studentId, setStudentId] = useState("");
-  const [usage, setUsage] = useState<any>(null);
-  const [showForm, setShowForm] = useState(false);
-  const [minutes, setMinutes] = useState(10);
-  const [reason, setReason] = useState("friends");
+  const [student, setStudent] = useState<{ id: string; display_name: string } | null>(null);
+  const [usage, setUsage] = useState<any | null>(null);
+  const [rules, setRules] = useState<any[]>([]);
+  const [requests, setRequests] = useState<any[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  const [reasonCode, setReasonCode] = useState(REASON_OPTIONS[0].key);
+  const [ruleId, setRuleId] = useState("");
+  const [minutes, setMinutes] = useState("15");
   const [explanation, setExplanation] = useState("");
-  const [status, setStatus] = useState<string | null>(null);
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem("focussentinel_student_id");
-    if (saved) {
-      setStudentId(saved);
-      loadUsage(saved);
-    }
-  }, []);
-
-  async function loadUsage(id: string) {
-    try {
-      const u = await api.usageToday(id);
-      setUsage(u);
-    } catch (e: any) {
-      setStatus(e.message);
-    }
-  }
-
-  function saveStudentId(e: React.FormEvent) {
-    e.preventDefault();
-    window.localStorage.setItem("focussentinel_student_id", studentId);
-    loadUsage(studentId);
-  }
-
-  async function submitRequest(e: React.FormEvent) {
-    e.preventDefault();
-    try {
-      await api.requestExtension({
-        student_id: studentId,
-        requested_minutes: minutes,
-        reason_code: reason,
-        explanation,
-      });
-      setStatus("Request sent! You'll hear back from a parent or guardian soon.");
-      setShowForm(false);
-    } catch (e: any) {
-      setStatus(e.message);
-    }
-  }
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState(false);
 
   function signOut() {
     clearToken();
     router.push("/");
   }
 
+  async function refresh(studentId: string) {
+    try {
+      const [u, r, reqs] = await Promise.all([api.usageToday(studentId), api.listRules(studentId), api.listExtensionRequests(studentId)]);
+      setUsage(u);
+      setRules(r);
+      setRequests(reqs);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  useEffect(() => {
+    api
+      .myStudentProfile()
+      .then(async (s) => {
+        setStudent(s);
+        await refresh(s.id);
+      })
+      .catch((e: any) => setError(e.message || "No student profile is linked to this account."))
+      .finally(() => setLoaded(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!student) return;
+    const interval = setInterval(() => refresh(student.id), 10_000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [student]);
+
+  async function handleSubmitRequest(e: React.FormEvent) {
+    e.preventDefault();
+    if (!student) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await api.requestExtension({
+        student_id: student.id,
+        rule_id: ruleId || undefined,
+        requested_minutes: minutes ? Number(minutes) : undefined,
+        reason_code: reasonCode,
+        explanation: explanation || undefined,
+      });
+      setSubmitted(true);
+      setExplanation("");
+      await refresh(student.id);
+    } catch (e: any) {
+      setSubmitError(e.message || "Could not send your request.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (loaded && !student) {
+    return (
+      <>
+        <Header
+          right={
+            <a onClick={signOut} style={{ cursor: "pointer" }}>
+              Sign out
+            </a>
+          }
+        />
+        <div className="container">
+          <p>{error || "No student profile is linked to this account."}</p>
+          <button onClick={signOut}>Back to sign in</button>
+        </div>
+      </>
+    );
+  }
+
   return (
-    <div className="container">
-      <nav>
-        <a className="active">My FocusSentinel</a>
-        <a onClick={signOut} style={{ marginLeft: "auto", cursor: "pointer" }}>
-          Sign out
-        </a>
-      </nav>
+    <>
+      <Header
+        right={
+          <>
+            <a href="/account">Account</a>
+            <a onClick={signOut} style={{ cursor: "pointer" }}>
+              Sign out
+            </a>
+          </>
+        }
+      />
+      <div className="container">
+        <h1>{student ? `Hi ${student.display_name}` : "Loading..."}</h1>
+        <p className="muted">Your screen-time limits and usage for today.</p>
 
-      {!usage && (
-        <form onSubmit={saveStudentId} className="card">
-          <label>Your student ID (ask a parent/guardian if you don't have it)</label>
-          <input value={studentId} onChange={(e) => setStudentId(e.target.value)} required />
-          <button type="submit">View my usage</button>
-        </form>
-      )}
+        <div className="card">
+          <h2>Today's usage</h2>
+          {rules.length === 0 ? (
+            <p className="muted">No limits have been set for you yet.</p>
+          ) : (
+            rules.map((rule) => {
+              const label = ruleDisplayLabel(rule);
+              const seconds = usage?.total_seconds_by_rule?.[rule.id] || 0;
+              const minutesUsed = seconds / 60;
+              const limit = rule.daily_limit_minutes || 0;
+              const remaining = Math.max(0, limit - minutesUsed);
+              const percent = limit > 0 ? Math.min(100, Math.round((minutesUsed / limit) * 100)) : 0;
+              const restricted = usage?.active_restrictions?.some((r: any) => r.rule_id === rule.id);
+              const warnTwo = usage?.active_warnings?.some((w: any) => w.rule_id === rule.id && w.level === 2);
+              const warnOne = usage?.active_warnings?.some((w: any) => w.rule_id === rule.id && w.level === 1);
+              const statusCls = restricted ? "restricted" : warnTwo ? "warning_two" : warnOne ? "warning_one" : percent >= 80 ? "progress_notice" : "none";
+              const statusText = restricted ? "Restricted" : warnTwo ? "Final warning" : warnOne ? "First warning" : percent >= 80 ? "Almost there" : "Within limit";
+              return (
+                <div key={rule.id} style={{ marginBottom: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                    <strong>{label}</strong>
+                    <span className={`badge ${statusCls}`}>{statusText}</span>
+                  </div>
+                  <p className="muted" style={{ margin: "0 0 6px", fontSize: 13 }}>
+                    {Math.round(minutesUsed)} of {limit} minutes used · {Math.round(remaining)} minutes remaining
+                  </p>
+                  <div role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} aria-label={`${label} usage`} style={{ background: "var(--border)", borderRadius: 999, height: 8, overflow: "hidden" }}>
+                    <div
+                      style={{
+                        width: `${percent}%`,
+                        height: "100%",
+                        borderRadius: 999,
+                        background: statusCls === "restricted" ? "#991b1b" : statusCls === "warning_two" ? "#c2410c" : statusCls === "warning_one" ? "#b45309" : "#2563eb",
+                        transition: "width 0.3s ease",
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
 
-      {usage && (
-        <>
-          <div className="card">
-            <h2>What FocusSentinel measures</h2>
-            <p className="muted">
-              Only the time you actively spend, in the foreground, on activities your family enabled —
-              never page content, messages, screenshots, or keystrokes.
+        <div className="card">
+          <h2>Ask for more time</h2>
+          {submitted && (
+            <p className="muted" style={{ fontSize: 13, color: "#166534" }}>
+              Sent — your parent will see this on their dashboard.
             </p>
-          </div>
-
-          <div className="card">
-            <h2>Today so far</h2>
-            {Object.entries(usage.total_seconds_by_category || {}).map(([cat, seconds]: any) => (
-              <div className="row" key={cat}>
-                <span>{cat.replace(/_/g, " ")}</span>
-                <span>{Math.round(seconds / 60)} min used</span>
-              </div>
-            ))}
-            {usage.active_restrictions?.length > 0 && (
-              <div className="row">
-                <span className="badge restricted">Restricted</span>
-                <span className="muted">
-                  Available again at {new Date(usage.active_restrictions[0].scheduled_reset_at).toLocaleTimeString()}
-                </span>
-              </div>
-            )}
-          </div>
-
-          <div className="card">
-            <h2>Need more time?</h2>
-            {!showForm && <button onClick={() => setShowForm(true)}>Request more time</button>}
-            {showForm && (
-              <form onSubmit={submitRequest}>
-                <label>Minutes</label>
-                <select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>
-                  <option value={5}>5</option>
-                  <option value={10}>10</option>
-                  <option value={15}>15</option>
-                  <option value={30}>30</option>
+          )}
+          <form onSubmit={handleSubmitRequest}>
+            {rules.length > 0 && (
+              <>
+                <label htmlFor="req-rule">Which limit?</label>
+                <select id="req-rule" value={ruleId} onChange={(e) => setRuleId(e.target.value)}>
+                  <option value="">Not sure / general request</option>
+                  {rules.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {ruleDisplayLabel(r)}
+                    </option>
+                  ))}
                 </select>
-                <label>Reason</label>
-                <select value={reason} onChange={(e) => setReason(e.target.value)}>
-                  <option value="friends">Playing with friends</option>
-                  <option value="special_event">Special event</option>
-                  <option value="school_related">School-related use</option>
-                  <option value="technical_issue">Technical issue</option>
-                  <option value="other">Other</option>
-                </select>
-                <label>Anything else? (optional)</label>
-                <textarea value={explanation} onChange={(e) => setExplanation(e.target.value)} rows={2} />
-                <button type="submit">Send request</button>
-              </form>
+              </>
             )}
-            {status && <p className="muted">{status}</p>}
-          </div>
-        </>
-      )}
-    </div>
+            <label htmlFor="req-minutes">How many extra minutes?</label>
+            <input id="req-minutes" type="number" min={1} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
+            <label htmlFor="req-reason">Reason</label>
+            <select id="req-reason" value={reasonCode} onChange={(e) => setReasonCode(e.target.value)}>
+              {REASON_OPTIONS.map((r) => (
+                <option key={r.key} value={r.key}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+            <label htmlFor="req-explanation">Tell your parent why (optional)</label>
+            <textarea id="req-explanation" value={explanation} onChange={(e) => setExplanation(e.target.value)} rows={3} />
+            {submitError && <p style={{ color: "#991b1b", fontSize: 13 }}>{submitError}</p>}
+            <button type="submit" disabled={submitting}>
+              {submitting ? "Sending..." : "Send request"}
+            </button>
+          </form>
+        </div>
+
+        <div className="card">
+          <h2>Your requests</h2>
+          {requests.length === 0 && <p className="muted">No requests yet.</p>}
+          {requests.map((r) => (
+            <div className="row" key={r.id}>
+              <span>
+                {r.requested_minutes ? `${r.requested_minutes} min` : "Request"} — {r.reason_code.replace(/_/g, " ")}
+              </span>
+              <span
+                className={`badge ${r.status === "approved" ? "none" : r.status === "denied" ? "restricted" : "warning_one"}`}
+              >
+                {r.status}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
   );
 }

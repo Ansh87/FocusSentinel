@@ -40,6 +40,12 @@ TEMPLATES = {
         "FocusSentinel has not received activity information from this device recently. "
         "Please check its permissions or connectivity when convenient.",
     ),
+    "password_reset": (
+        "Reset your FocusSentinel password",
+        "We received a request to reset the password for this account. Use this link within "
+        "{expires_minutes} minutes to choose a new one: {reset_url}\n\n"
+        "If you didn't request this, you can safely ignore this email.",
+    ),
     "daily_summary": (
         "Daily FocusSentinel summary",
         "Here is today's usage summary.",
@@ -57,6 +63,8 @@ def render(event_type: str, payload: dict) -> tuple[str, str]:
     safe_payload.setdefault("student_name", "Your student")
     safe_payload.setdefault("rule_name", "this activity")
     safe_payload.setdefault("message", "")
+    safe_payload.setdefault("reset_url", "")
+    safe_payload.setdefault("expires_minutes", "")
     try:
         subject = subject_tpl.format(**safe_payload)
         body = body_tpl.format(**safe_payload)

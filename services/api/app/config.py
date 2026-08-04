@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 30
+    password_reset_expire_minutes: int = 30
+
+    # Base URL of the deployed web-dashboard, used to build the link inside
+    # password-reset emails (e.g. "https://web-dashboard-production-xxxx.up.railway.app").
+    # Falls back to localhost for local dev.
+    frontend_base_url: str = "http://localhost:3000"
 
     device_token_bytes: int = 32
 

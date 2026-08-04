@@ -26,6 +26,30 @@ class TokenResponse(BaseModel):
     role: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+
+
+class RequestPasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(min_length=8)
+
+
+class StudentLoginCreate(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
+
+
+class StudentLoginStatus(BaseModel):
+    has_login: bool
+    email: Optional[str] = None
+
+
 # ---- Families / Students ----
 class FamilyCreate(BaseModel):
     name: str
@@ -185,6 +209,17 @@ class TodayUsageOut(BaseModel):
     total_seconds_by_rule: dict[str, int] = Field(default_factory=dict)
     active_warnings: list[dict]
     active_restrictions: list[dict]
+
+
+class UsageHistoryDay(BaseModel):
+    date: str
+    total_seconds: int
+    total_seconds_by_category: dict[str, int]
+
+
+class UsageHistoryOut(BaseModel):
+    student_id: str
+    days: list[UsageHistoryDay]
 
 
 # ---- Extension requests ----

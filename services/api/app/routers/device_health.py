@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from .. import models, schemas
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import ensure_own_student_or_parent, get_current_user
 
 router = APIRouter(prefix="/device-health", tags=["device-health"])
 
@@ -20,6 +20,7 @@ DELAYED_THRESHOLD_MINUTES = 10
 
 @router.get("", response_model=list[schemas.DeviceHealthOut])
 def device_health(student_id: str, db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    ensure_own_student_or_parent(db, user, student_id)
     devices = db.query(models.Device).filter_by(student_id=student_id).all()
     out = []
     now = datetime.utcnow()
