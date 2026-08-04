@@ -61,4 +61,11 @@ export const api = {
     request(`/extension-requests?student_id=${studentId}${status ? `&status=${status}` : ""}`),
   deviceHealth: (studentId: string) => request(`/device-health?student_id=${studentId}`),
   auditLog: (familyId: string) => request(`/audit-log?family_id=${familyId}`),
+  loadDemo: () => request("/demo/load", { method: "POST" }),
+  resetDemo: () => request("/demo/reset", { method: "POST" }),
 };
+
+export const DEMO_FAMILY_NAME = "Demo Family (Sample Data)";
+export function isDemoFamily(name: string | undefined) {
+  return name === DEMO_FAMILY_NAME;
+}

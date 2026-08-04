@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, clearToken } from "../../lib/api";
+import { api, clearToken, isDemoFamily } from "../../lib/api";
 import { Header } from "../../components/Header";
 
 type Student = { id: string; display_name: string; family_id: string };
@@ -16,6 +16,7 @@ type Rule = {
   student_id: string;
   name: string;
   scope_type: string;
+  scope_category_key: string | null;
   daily_limit_minutes: number | null;
   warning_one_at_minutes: number;
   active: boolean;
@@ -34,6 +35,21 @@ const CATEGORY_OPTIONS = [
   { key: "other", label: "Other" },
 ];
 
+function categoryLabel(key: string) {
+  return CATEGORY_OPTIONS.find((c) => c.key === key)?.label || key.replace(/_/g, " ");
+}
+
+function usageStatusFor(usage: TodayUsage | null, ruleId: string, percent: number) {
+  const restricted = usage?.active_restrictions.some((r) => r.rule_id === ruleId);
+  if (restricted) return { text: "Restricted", cls: "restricted" };
+  const w2 = usage?.active_warnings.some((w) => w.rule_id === ruleId && w.level === 2);
+  if (w2) return { text: "Final warning issued", cls: "warning_two" };
+  const w1 = usage?.active_warnings.some((w) => w.rule_id === ruleId && w.level === 1);
+  if (w1) return { text: "First warning issued", cls: "warning_one" };
+  if (percent >= 80) return { text: "Approaching limit", cls: "progress_notice" };
+  return { text: "Within limit", cls: "none" };
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [families, setFamilies] = useState<{ id: string; name: string }[]>([]);
@@ -46,6 +62,8 @@ export default function DashboardPage() {
   const [editLimits, setEditLimits] = useState<Record<string, string>>({});
   const [savingRuleId, setSavingRuleId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [familiesLoaded, setFamiliesLoaded] = useState(false);
+  const [demoBusy, setDemoBusy] = useState(false);
 
   const [showNewRule, setShowNewRule] = useState(false);
   const [newCategory, setNewCategory] = useState(CATEGORY_OPTIONS[0].key);
@@ -53,19 +71,54 @@ export default function DashboardPage() {
   const [creatingRule, setCreatingRule] = useState(false);
   const [ruleError, setRuleError] = useState<string | null>(null);
 
+  async function loadFamilies() {
+    try {
+      const fams = await api.myFamilies();
+      setFamilies(fams);
+      if (fams.length > 0) {
+        const s = await api.listStudents(fams[0].id);
+        setStudents(s);
+        if (s.length > 0) setSelectedStudent(s[0].id);
+      } else {
+        setStudents([]);
+        setSelectedStudent(null);
+      }
+    } catch (e: any) {
+      setError(e.message || "Please sign in again.");
+    } finally {
+      setFamiliesLoaded(true);
+    }
+  }
+
   useEffect(() => {
-    api
-      .myFamilies()
-      .then(async (fams) => {
-        setFamilies(fams);
-        if (fams.length > 0) {
-          const s = await api.listStudents(fams[0].id);
-          setStudents(s);
-          if (s.length > 0) setSelectedStudent(s[0].id);
-        }
-      })
-      .catch((e) => setError(e.message || "Please sign in again."));
+    loadFamilies();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function handleLoadDemo() {
+    setDemoBusy(true);
+    try {
+      await api.loadDemo();
+      await loadFamilies();
+    } catch (e: any) {
+      setError(e.message || "Could not load demo data.");
+    } finally {
+      setDemoBusy(false);
+    }
+  }
+
+  async function handleResetDemo() {
+    setDemoBusy(true);
+    try {
+      await api.resetDemo();
+      await loadFamilies();
+      await refresh();
+    } catch (e: any) {
+      setError(e.message || "Could not reset demo data.");
+    } finally {
+      setDemoBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!selectedStudent) return;
@@ -180,31 +233,88 @@ export default function DashboardPage() {
       />
       <div className="container">
         <h1>Family overview</h1>
-        <p className="muted">
-          {families[0]?.name || "Your family"} · {students.length} student{students.length === 1 ? "" : "s"}
-        </p>
 
-        {students.length > 1 && (
-          <select value={selectedStudent || ""} onChange={(e) => setSelectedStudent(e.target.value)}>
-            {students.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.display_name}
-              </option>
-            ))}
-          </select>
-        )}
+        {familiesLoaded && families.length === 0 ? (
+          <div className="card">
+            <h2>No family set up yet</h2>
+            <p className="muted">
+              Create a family from the API directly, or load a self-contained sample family — a
+              student, a Chrome extension, two rules, some usage, a warning, and a pending
+              request — to see how FocusSentinel works. Sample data is clearly labeled and never
+              mixed with a real account's data.
+            </p>
+            <button onClick={handleLoadDemo} disabled={demoBusy}>
+              {demoBusy ? "Loading..." : "Load Demo Family"}
+            </button>
+          </div>
+        ) : (
+          <>
+            <p className="muted" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>
+                {families[0]?.name || "Your family"} · {students.length} student{students.length === 1 ? "" : "s"}
+              </span>
+              {isDemoFamily(families[0]?.name) && <span className="badge none">Demo · sample data</span>}
+              {isDemoFamily(families[0]?.name) && (
+                <button className="secondary" onClick={handleResetDemo} disabled={demoBusy} style={{ marginLeft: "auto" }}>
+                  {demoBusy ? "Resetting..." : "Reset Demo"}
+                </button>
+              )}
+            </p>
+
+            {students.length > 1 && (
+              <select value={selectedStudent || ""} onChange={(e) => setSelectedStudent(e.target.value)}>
+                {students.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.display_name}
+                  </option>
+                ))}
+              </select>
+            )}
 
         <div className="card">
-          <h2>Today's usage by category</h2>
-          {usage && Object.keys(usage.total_seconds_by_category).length > 0 ? (
-            Object.entries(usage.total_seconds_by_category).map(([cat, seconds]) => (
-              <div className="row" key={cat}>
-                <span>{cat.replace(/_/g, " ")}</span>
-                <span>{Math.round(seconds / 60)} min</span>
-              </div>
-            ))
-          ) : (
+          <h2>Today's usage</h2>
+          {rules.length === 0 ? (
             <p className="muted">No tracked activity yet today.</p>
+          ) : (
+            rules.map((rule) => {
+              const key = rule.scope_category_key;
+              const seconds = (key && usage?.total_seconds_by_category[key]) || 0;
+              const minutesUsed = seconds / 60;
+              const limit = rule.daily_limit_minutes || 0;
+              const remaining = Math.max(0, limit - minutesUsed);
+              const percent = limit > 0 ? Math.min(100, Math.round((minutesUsed / limit) * 100)) : 0;
+              const status = usageStatusFor(usage, rule.id, percent);
+              return (
+                <div key={rule.id} style={{ marginBottom: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                    <strong>{key ? categoryLabel(key) : rule.name}</strong>
+                    <span className={`badge ${status.cls}`}>{status.text}</span>
+                  </div>
+                  <p className="muted" style={{ margin: "0 0 6px", fontSize: 13 }}>
+                    {Math.round(minutesUsed)} of {limit} minutes used · {Math.round(remaining)} minutes remaining · {percent}%
+                  </p>
+                  <div
+                    role="progressbar"
+                    aria-valuenow={percent}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label={`${key ? categoryLabel(key) : rule.name} usage`}
+                    style={{ background: "var(--border)", borderRadius: 999, height: 8, overflow: "hidden" }}
+                  >
+                    <div
+                      style={{
+                        width: `${percent}%`,
+                        height: "100%",
+                        borderRadius: 999,
+                        background:
+                          status.cls === "restricted" ? "#991b1b" : status.cls === "warning_two" ? "#c2410c" : status.cls === "warning_one" ? "#b45309" : "#2563eb",
+                        transition: "width 0.3s ease",
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })
           )}
         </div>
 
@@ -318,6 +428,8 @@ export default function DashboardPage() {
             </div>
           ))}
         </div>
+          </>
+        )}
       </div>
     </>
   );

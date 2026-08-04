@@ -8,6 +8,27 @@ from ..deps import require_parent
 router = APIRouter(prefix="/rules", tags=["rules"])
 
 
+def _to_rule_out(db: Session, rule: models.ScreenTimeRule) -> schemas.RuleOut:
+    category_key = None
+    if rule.scope_category_id:
+        category = db.get(models.ActivityCategory, rule.scope_category_id)
+        category_key = category.key if category else None
+    return schemas.RuleOut(
+        id=rule.id,
+        student_id=rule.student_id,
+        name=rule.name,
+        scope_type=rule.scope_type,
+        scope_category_key=category_key,
+        daily_limit_minutes=rule.daily_limit_minutes,
+        warning_one_at_minutes=rule.warning_one_at_minutes,
+        warning_two_after_additional_minutes=rule.warning_two_after_additional_minutes,
+        block_after_warning_two_seconds=rule.block_after_warning_two_seconds,
+        days_of_week=rule.days_of_week,
+        reset_time=rule.reset_time,
+        active=rule.active,
+    )
+
+
 @router.post("", response_model=schemas.RuleOut, status_code=201)
 def create_rule(payload: schemas.RuleCreate, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
     student = db.get(models.Student, payload.student_id)
@@ -55,7 +76,7 @@ def create_rule(payload: schemas.RuleCreate, db: Session = Depends(get_db), user
     )
     db.commit()
     db.refresh(rule)
-    return rule
+    return _to_rule_out(db, rule)
 
 
 @router.put("/{rule_id}", response_model=schemas.RuleOut)
@@ -78,9 +99,10 @@ def update_rule(rule_id: str, payload: schemas.RuleUpdate, db: Session = Depends
     )
     db.commit()
     db.refresh(rule)
-    return rule
+    return _to_rule_out(db, rule)
 
 
 @router.get("/student/{student_id}", response_model=list[schemas.RuleOut])
 def list_rules(student_id: str, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
-    return db.query(models.ScreenTimeRule).filter_by(student_id=student_id).all()
+    rules = db.query(models.ScreenTimeRule).filter_by(student_id=student_id).all()
+    return [_to_rule_out(db, r) for r in rules]

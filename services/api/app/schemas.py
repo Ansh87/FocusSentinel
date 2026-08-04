@@ -109,8 +109,13 @@ class RuleOut(BaseModel):
     student_id: str
     name: str
     scope_type: str
+    scope_category_key: Optional[str] = None
     daily_limit_minutes: Optional[int]
     warning_one_at_minutes: int
+    warning_two_after_additional_minutes: Optional[int] = None
+    block_after_warning_two_seconds: Optional[int] = None
+    days_of_week: Optional[list[int]] = None
+    reset_time: Optional[str] = None
     active: bool
     model_config = {"from_attributes": True}
 

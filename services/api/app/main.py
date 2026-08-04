@@ -6,6 +6,7 @@ from .database import Base, engine
 from .routers import (
     audit_log,
     auth,
+    demo,
     device_health,
     devices,
     extension_requests,
@@ -49,6 +50,7 @@ app.include_router(extension_requests.router)
 app.include_router(notification_recipients.router)
 app.include_router(device_health.router)
 app.include_router(audit_log.router)
+app.include_router(demo.router)
 
 
 @app.get("/health")
