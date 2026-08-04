@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from .. import models, schemas, setup_status
 from ..database import get_db
 from ..deps import require_parent
+from .demo import DEMO_FAMILY_NAME, RESERVED_DEMO_EMAIL
 
 router = APIRouter(prefix="/families", tags=["families"])
 
@@ -54,7 +55,30 @@ def my_families(db: Session = Depends(get_db), user: models.User = Depends(requi
     family_ids = [m.family_id for m in memberships]
     if not family_ids:
         return []
-    return db.query(models.Family).filter(models.Family.id.in_(family_ids)).all()
+    families = db.query(models.Family).filter(models.Family.id.in_(family_ids)).all()
+
+    # One-time self-heal for accounts affected by an earlier bug (fixed
+    # elsewhere in this codebase) where the old "Explore with sample data"
+    # button called /demo/load on whatever account was signed in, rather
+    # than only the reserved public demo login -- that could leave a real
+    # parent's own family literally named "Demo Family (Sample Data)",
+    # which then wrongly shows the Simulate/Reset demo controls and the
+    # "Demo · sample data" badge on their real dashboard. Renaming here
+    # (rather than a one-off migration script) means it self-corrects the
+    # moment any affected account loads their family list, with no manual
+    # DB access required.
+    if user.email != RESERVED_DEMO_EMAIL:
+        healed = False
+        for fam in families:
+            if fam.name == DEMO_FAMILY_NAME:
+                fam.name = "My Family"
+                healed = True
+        if healed:
+            db.commit()
+            for fam in families:
+                db.refresh(fam)
+
+    return families
 
 
 @router.get("/{family_id}", response_model=schemas.FamilyOut)

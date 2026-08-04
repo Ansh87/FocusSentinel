@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from .. import cascade, models, schemas, setup_status
 from ..database import get_db
 from ..deps import active_sibling_grant, ensure_own_student_or_parent, get_current_user, require_parent
+from ..phone import normalize_phone
 from ..security import hash_password
 from ..usage_service import seconds_today_for_rule
 
@@ -18,6 +19,7 @@ def _to_student_out(db: Session, student: models.Student) -> schemas.StudentOut:
     out.is_sibling_manager = grant is not None
     out.sibling_manager_until = grant.expires_at if grant else None
     out.is_archived = db.get(models.StudentArchiveState, student.id) is not None
+    out.has_phone = db.get(models.StudentPhone, student.id) is not None
     return out
 
 
@@ -95,6 +97,78 @@ def update_student(student_id: str, payload: schemas.StudentUpdate, db: Session 
     db.commit()
     db.refresh(student)
     return _to_student_out(db, student)
+
+
+@router.get("/{student_id}/phone", response_model=schemas.StudentPhoneOut)
+def get_student_phone(student_id: str, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    student, family = _student_and_family(db, student_id)
+    membership = db.query(models.FamilyMember).filter_by(family_id=family.id, user_id=user.id).first()
+    if not membership:
+        raise HTTPException(403, "Not a member of this family")
+    row = db.get(models.StudentPhone, student_id)
+    if not row:
+        return schemas.StudentPhoneOut(has_phone=False, phone_number=None)
+    return schemas.StudentPhoneOut(has_phone=True, phone_number=row.phone_number)
+
+
+@router.post("/{student_id}/phone", response_model=schemas.StudentPhoneOut)
+def set_student_phone(student_id: str, payload: schemas.StudentPhoneIn, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    """Registers the phone number this student texts FROM to request more
+    time -- see app/routers/sms.py for the inbound webhook that matches on
+    it. Calling this again on an existing row updates the number (e.g. the
+    student got a new phone)."""
+    student, family = _student_and_family(db, student_id)
+    membership = db.query(models.FamilyMember).filter_by(family_id=family.id, user_id=user.id).first()
+    if not membership:
+        raise HTTPException(403, "Not a member of this family")
+
+    try:
+        normalized = normalize_phone(payload.phone_number)
+    except ValueError:
+        raise HTTPException(400, "That doesn't look like a valid phone number.")
+
+    existing_owner = db.query(models.StudentPhone).filter_by(phone_number=normalized).first()
+    if existing_owner and existing_owner.student_id != student_id:
+        raise HTTPException(409, "That phone number is already registered to another student.")
+
+    row = db.get(models.StudentPhone, student_id)
+    if row:
+        row.phone_number = normalized
+    else:
+        db.add(models.StudentPhone(student_id=student_id, phone_number=normalized))
+    db.add(
+        models.AuditLog(
+            family_id=family.id,
+            actor_user_id=user.id,
+            actor_type="parent",
+            action="student.phone_set",
+            target_type="student",
+            target_id=student_id,
+        )
+    )
+    db.commit()
+    return schemas.StudentPhoneOut(has_phone=True, phone_number=normalized)
+
+
+@router.delete("/{student_id}/phone")
+def clear_student_phone(student_id: str, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    student, family = _student_and_family(db, student_id)
+    membership = db.query(models.FamilyMember).filter_by(family_id=family.id, user_id=user.id).first()
+    if not membership:
+        raise HTTPException(403, "Not a member of this family")
+    db.query(models.StudentPhone).filter_by(student_id=student_id).delete(synchronize_session=False)
+    db.add(
+        models.AuditLog(
+            family_id=family.id,
+            actor_user_id=user.id,
+            actor_type="parent",
+            action="student.phone_removed",
+            target_type="student",
+            target_id=student_id,
+        )
+    )
+    db.commit()
+    return {"status": "phone_removed"}
 
 
 @router.post("/{student_id}/archive", response_model=schemas.StudentOut)

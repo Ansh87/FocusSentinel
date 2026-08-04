@@ -6,9 +6,83 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
 from ..deps import ensure_can_manage_student, ensure_own_student_or_parent, get_current_user
-from ..notifications import enqueue_notification
+from ..notifications import create_sms_decision_links, enqueue_notification
 
 router = APIRouter(prefix="/extension-requests", tags=["extension-requests"])
+
+
+def approve_request_internal(
+    db: Session,
+    req: models.ExtensionRequest,
+    *,
+    user_id: str | None,
+    actor_type: str,
+    minutes: int,
+) -> None:
+    """Shared by the parent-facing HTTP endpoint and the SMS webhook (a
+    parent texting back "YES") so the two paths can never drift apart on
+    what "approved" actually does -- lift the restriction, stamp the
+    decision, log it, notify the student."""
+    req.status = "approved"
+    req.decided_by = user_id
+    req.decided_minutes = minutes
+    req.decided_at = datetime.utcnow()
+
+    if req.restriction_event_id:
+        restriction = db.get(models.RestrictionEvent, req.restriction_event_id)
+        if restriction and restriction.active:
+            restriction.active = False
+            restriction.lifted_at = datetime.utcnow()
+            restriction.lifted_reason = "extension_approved"
+
+    student = db.get(models.Student, req.student_id)
+    db.add(
+        models.AuditLog(
+            family_id=student.family_id if student else None,
+            actor_user_id=user_id,
+            actor_type=actor_type,
+            action="extension_request.approved",
+            target_type="extension_request",
+            target_id=req.id,
+            event_metadata={"minutes": minutes},
+        )
+    )
+    if student:
+        enqueue_notification(
+            db,
+            family_id=student.family_id,
+            student_id=student.id,
+            event_type="extension_approved",
+            rule_id=req.rule_id,
+            payload={"minutes": minutes},
+        )
+
+
+def deny_request_internal(db: Session, req: models.ExtensionRequest, *, user_id: str | None, actor_type: str) -> None:
+    req.status = "denied"
+    req.decided_by = user_id
+    req.decided_at = datetime.utcnow()
+
+    student = db.get(models.Student, req.student_id)
+    db.add(
+        models.AuditLog(
+            family_id=student.family_id if student else None,
+            actor_user_id=user_id,
+            actor_type=actor_type,
+            action="extension_request.denied",
+            target_type="extension_request",
+            target_id=req.id,
+        )
+    )
+    if student:
+        enqueue_notification(
+            db,
+            family_id=student.family_id,
+            student_id=student.id,
+            event_type="extension_denied",
+            rule_id=req.rule_id,
+            payload={},
+        )
 
 
 @router.get("", response_model=list[schemas.ExtensionRequestOut])
@@ -38,6 +112,8 @@ def create_extension_request(payload: schemas.ExtensionRequestCreate, db: Sessio
     db.add(req)
     db.flush()
 
+    sms_code = create_sms_decision_links(db, family_id=student.family_id, extension_request_id=req.id)
+
     enqueue_notification(
         db,
         family_id=student.family_id,
@@ -49,6 +125,7 @@ def create_extension_request(payload: schemas.ExtensionRequestCreate, db: Sessio
             "requested_minutes": payload.requested_minutes,
             "reason_code": payload.reason_code,
             "explanation": payload.explanation,
+            "sms_reply_hint": f" Reply YES {sms_code} or NO {sms_code} by text to decide now." if sms_code else "",
         },
     )
     db.commit()
@@ -129,40 +206,8 @@ def approve_extension_request(request_id: str, decision: schemas.ExtensionDecisi
         raise HTTPException(409, f"Request already {req.status}")
 
     minutes = 24 * 60 if decision.rest_of_day else (decision.minutes or req.requested_minutes or 0)
-    req.status = "approved"
-    req.decided_by = user.id
-    req.decided_minutes = minutes
-    req.decided_at = datetime.utcnow()
-
-    if req.restriction_event_id:
-        restriction = db.get(models.RestrictionEvent, req.restriction_event_id)
-        if restriction and restriction.active:
-            restriction.active = False
-            restriction.lifted_at = datetime.utcnow()
-            restriction.lifted_reason = "extension_approved"
-
     actor_type = "parent" if user.role in ("parent", "admin") else "sibling_manager"
-    student = db.get(models.Student, req.student_id)
-    db.add(
-        models.AuditLog(
-            family_id=student.family_id if student else None,
-            actor_user_id=user.id,
-            actor_type=actor_type,
-            action="extension_request.approved",
-            target_type="extension_request",
-            target_id=req.id,
-            event_metadata={"minutes": minutes},
-        )
-    )
-    if student:
-        enqueue_notification(
-            db,
-            family_id=student.family_id,
-            student_id=student.id,
-            event_type="extension_approved",
-            rule_id=req.rule_id,
-            payload={"minutes": minutes},
-        )
+    approve_request_internal(db, req, user_id=user.id, actor_type=actor_type, minutes=minutes)
     db.commit()
     db.refresh(req)
     return req
@@ -177,31 +222,8 @@ def deny_extension_request(request_id: str, db: Session = Depends(get_db), user:
     if req.status != "pending":
         raise HTTPException(409, f"Request already {req.status}")
 
-    req.status = "denied"
-    req.decided_by = user.id
-    req.decided_at = datetime.utcnow()
-
     actor_type = "parent" if user.role in ("parent", "admin") else "sibling_manager"
-    student = db.get(models.Student, req.student_id)
-    db.add(
-        models.AuditLog(
-            family_id=student.family_id if student else None,
-            actor_user_id=user.id,
-            actor_type=actor_type,
-            action="extension_request.denied",
-            target_type="extension_request",
-            target_id=req.id,
-        )
-    )
-    if student:
-        enqueue_notification(
-            db,
-            family_id=student.family_id,
-            student_id=student.id,
-            event_type="extension_denied",
-            rule_id=req.rule_id,
-            payload={},
-        )
+    deny_request_internal(db, req, user_id=user.id, actor_type=actor_type)
     db.commit()
     db.refresh(req)
     return req

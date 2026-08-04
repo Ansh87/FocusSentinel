@@ -67,6 +67,11 @@ export const api = {
     request(`/students/${studentId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   archiveStudent: (studentId: string) => request(`/students/${studentId}/archive`, { method: "POST" }),
   unarchiveStudent: (studentId: string) => request(`/students/${studentId}/unarchive`, { method: "POST" }),
+  getStudentPhone: (studentId: string) => request(`/students/${studentId}/phone`),
+  setStudentPhone: (studentId: string, phone_number: string) =>
+    request(`/students/${studentId}/phone`, { method: "POST", body: JSON.stringify({ phone_number }) }),
+  clearStudentPhone: (studentId: string) => request(`/students/${studentId}/phone`, { method: "DELETE" }),
+  getSmsStatus: () => request("/sms/status"),
   deleteStudent: (studentId: string) => request(`/students/${studentId}`, { method: "DELETE" }),
   clearUsageHistory: (studentId: string) => request(`/students/${studentId}/usage/history`, { method: "DELETE" }),
   grantSiblingManager: (studentId: string, hours?: number | null) =>
@@ -119,4 +124,16 @@ export const api = {
 export const DEMO_FAMILY_NAME = "Demo Family (Sample Data)";
 export function isDemoFamily(name: string | undefined) {
   return name === DEMO_FAMILY_NAME;
+}
+
+// The one account the public "Try the Interactive Demo" login uses. Demo
+// controls (Simulate/Reset) must be gated on *this* -- the signed-in
+// account's email -- not on a family's name. A family name is just a label
+// a parent could type themselves, and an older bug (fixed server-side now)
+// could leave a real parent's own family named exactly DEMO_FAMILY_NAME;
+// gating on the account instead means that kind of mislabeling can never
+// expose demo-only controls to a real family again.
+export const RESERVED_DEMO_EMAIL = "parent@focussentinel.demo";
+export function isDemoAccountEmail(email: string | undefined | null) {
+  return email === RESERVED_DEMO_EMAIL;
 }

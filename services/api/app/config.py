@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     email_provider: str = "console"
     sms_provider: str = "console"
 
+    # The API doesn't send SMS itself (that's notification-worker's job, via
+    # its own twilio_sms adapter) but it does need to know the number so the
+    # dashboard can tell a parent/student what to text, and needs a shared
+    # secret to authenticate Twilio's inbound webhook (Twilio doesn't send
+    # any credential of its own by default -- a query-string token is the
+    # simplest thing that works without pulling the `twilio` package into
+    # this service just to verify its request signature).
+    twilio_from_number: str = ""
+    sms_webhook_token: str = ""
+
     cors_origins: list[str] = ["http://localhost:3000"]
 
     environment: str = "development"

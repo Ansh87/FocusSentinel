@@ -20,6 +20,27 @@ body {
   min-height: 100vh;
 }
 
+/* Pins the footer to the bottom of the viewport on short pages (e.g. the
+   login screen) without it floating mid-page, while still flowing normally
+   below tall content like the dashboard. */
+.page-shell { min-height: 100vh; display: flex; flex-direction: column; }
+.page-content { flex: 1 0 auto; }
+
+.site-footer { flex-shrink: 0; border-top: 1px solid var(--border); margin-top: 24px; }
+.site-footer-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 16px;
+  padding-bottom: 16px;
+  font-size: 13px;
+}
+.site-footer-nav { display: flex; gap: 16px; }
+.site-footer-nav a { color: var(--muted); text-decoration: none; }
+.site-footer-nav a:hover { color: var(--ink); }
+
 .container { max-width: 880px; margin: 0 auto; padding: 32px 20px; }
 .container-wide { max-width: 980px; margin: 0 auto; padding: 32px 20px; }
 

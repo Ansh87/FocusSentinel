@@ -9,13 +9,55 @@ retried, or swapped independently.
 """
 from __future__ import annotations
 
+import random
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
 from . import models
+from .phone import normalize_phone
 
 DEDUP_COOLDOWN_MINUTES = 15
+
+
+def create_sms_decision_links(db: Session, *, family_id: str, extension_request_id: str) -> str | None:
+    """Creates one SmsPendingDecision row per SMS-opted-in NotificationRecipient
+    in the family, all sharing the same short numeric code, so a parent can
+    text "YES 482" / "NO 482" back to approve or deny this specific request
+    -- see app/routers/sms.py's inbound webhook. Returns the code, or None
+    if nobody in the family has SMS enabled (nothing to link). Doesn't send
+    anything itself -- the actual text still goes out through the normal
+    enqueue_notification -> notification-worker pipeline; this just makes
+    the reply resolvable once it arrives."""
+    recipients = (
+        db.query(models.NotificationRecipient)
+        .filter_by(family_id=family_id)
+        .filter(models.NotificationRecipient.mobile_number.isnot(None))
+        .all()
+    )
+    sms_recipients = [r for r in recipients if "sms" in (r.preferred_channels or [])]
+    if not sms_recipients:
+        return None
+
+    code = f"{random.randint(0, 999):03d}"
+    linked_any = False
+    for recipient in sms_recipients:
+        try:
+            normalized = normalize_phone(recipient.mobile_number)
+        except ValueError:
+            continue
+        db.add(
+            models.SmsPendingDecision(
+                extension_request_id=extension_request_id,
+                phone_number=normalized,
+                code=code,
+            )
+        )
+        linked_any = True
+    if not linked_any:
+        return None
+    db.flush()
+    return code
 
 
 def enqueue_notification(

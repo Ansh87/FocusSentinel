@@ -13,6 +13,7 @@ from .routers import (
     families,
     notification_recipients,
     rules,
+    sms,
     students,
     usage_events,
     websites,
@@ -53,6 +54,7 @@ app.include_router(notification_recipients.router)
 app.include_router(device_health.router)
 app.include_router(audit_log.router)
 app.include_router(demo.router)
+app.include_router(sms.router)
 
 
 @app.get("/health")

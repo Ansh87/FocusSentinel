@@ -20,7 +20,7 @@ TEMPLATES = {
     "extension_requested": (
         "{student_name} requested more time",
         "{student_name} requested {requested_minutes} more minutes ({reason_code}). "
-        "Reason given: {explanation}. Review and respond from the FocusSentinel dashboard.",
+        "Reason given: {explanation}. Review and respond from the FocusSentinel dashboard.{sms_reply_hint}",
     ),
     "extension_approved": (
         "Extension approved",
@@ -65,6 +65,7 @@ def render(event_type: str, payload: dict) -> tuple[str, str]:
     safe_payload.setdefault("message", "")
     safe_payload.setdefault("reset_url", "")
     safe_payload.setdefault("expires_minutes", "")
+    safe_payload.setdefault("sms_reply_hint", "")
     try:
         subject = subject_tpl.format(**safe_payload)
         body = body_tpl.format(**safe_payload)

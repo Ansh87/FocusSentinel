@@ -109,7 +109,28 @@ railway run python ../../database/seed/seed.py
 
 `railway run` executes the command with that service's environment variables (including `DATABASE_URL`) injected, against your Railway Postgres instance.
 
-### 4.6 Point the browser extension at production
+### 4.6 Turn on two-way SMS (students texting for time, parents replying YES/NO)
+
+This is off by default (nobody can text in or get texted) until you add a
+real Twilio number. Everything server-side already exists — this is just
+wiring in credentials.
+
+1. Create a Twilio account and buy a phone number with SMS capability (Twilio's free trial number works for testing).
+2. On the **notification-worker** service, add:
+   - `SMS_PROVIDER` = `twilio`
+   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` = from the Twilio console
+   - `TWILIO_FROM_NUMBER` = the number you bought, e.g. `+15551234567`
+3. On the **API** service, add:
+   - `TWILIO_FROM_NUMBER` = the same number (the API only uses this to show parents/students what number to text, via `GET /sms/status` — it never sends anything itself)
+   - `SMS_WEBHOOK_TOKEN` = a random string (`openssl rand -hex 16`) — this is checked on every inbound webhook call so a random POST to the endpoint can't fake a request or an approval
+4. In the Twilio console, open your number's configuration and set **"A message comes in"** to a webhook:
+   `https://<your-api-domain>/sms/inbound?token=<the SMS_WEBHOOK_TOKEN you just set>`, method `HTTP POST`.
+5. Redeploy both services so the new variables take effect.
+6. In the dashboard, edit a student and add their phone number — they can then text that Twilio number to request more time, and any parent with a mobile number + "sms" in their notification preferences can reply `YES <code>` / `NO <code>` to decide.
+
+Known limits: numbers are matched by string equality after light US-centric normalization (`app/phone.py`) — international numbers should be entered with their full `+<country code>` prefix to be safe. If more than one request is pending for the same phone, replies should include the 3-digit code from the text to avoid ambiguity; without a code, the most recent pending one is assumed.
+
+### 4.7 Point the browser extension at production
 
 The extension currently has to be configured per install (see `apps/browser-extension/README.md`). Once you have a real device registered against the production API, run the same `chrome.runtime.sendMessage({type: "focussentinel:configure", config: {...}})` snippet with `apiBaseUrl` set to your API's Railway domain instead of `localhost:8000`.
 

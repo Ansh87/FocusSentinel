@@ -368,3 +368,35 @@ class DeviceHealthEvent(Base):
     event_type: Mapped[str] = mapped_column(String, nullable=False)
     details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class StudentPhone(Base):
+    """The phone number a student texts FROM to request more time, and that
+    the SMS webhook uses to identify *which* student an inbound text came
+    from. One row per student; phone_number is globally unique so an
+    inbound text always resolves to exactly one student. A brand-new table,
+    additive and safe via `Base.metadata.create_all` -- see
+    app/routers/sms.py for the inbound webhook that reads this."""
+
+    __tablename__ = "student_phones"
+    student_id: Mapped[str] = mapped_column(String(36), ForeignKey("students.id"), primary_key=True)
+    phone_number: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)  # normalized E.164-ish
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SmsPendingDecision(Base):
+    """A short-lived link between a parent's phone number and one pending
+    ExtensionRequest, created whenever that request is texted to an
+    SMS-opted-in NotificationRecipient. When that phone number later texts
+    back, the webhook looks up the newest unresolved row for the sending
+    number (optionally narrowed by `code`, since more than one request can
+    be pending at once) to know which request "YES"/"NO" applies to. A
+    brand-new table, additive and safe via `Base.metadata.create_all`."""
+
+    __tablename__ = "sms_pending_decisions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_id)
+    extension_request_id: Mapped[str] = mapped_column(String(36), ForeignKey("extension_requests.id"))
+    phone_number: Mapped[str] = mapped_column(String(32), nullable=False)  # normalized, the parent's number
+    code: Mapped[str] = mapped_column(String(8), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

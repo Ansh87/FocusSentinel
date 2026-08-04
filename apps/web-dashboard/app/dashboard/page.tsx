@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, clearToken, isDemoFamily } from "../../lib/api";
+import { api, clearToken, isDemoAccountEmail, isDemoFamily } from "../../lib/api";
 import { useRequireAuth } from "../../lib/useRequireAuth";
 import { Header } from "../../components/Header";
 
@@ -14,6 +14,7 @@ type Student = {
   is_sibling_manager?: boolean;
   sibling_manager_until?: string | null;
   is_archived?: boolean;
+  has_phone?: boolean;
 };
 type TodayUsage = {
   total_seconds_by_category: Record<string, number>;
@@ -485,6 +486,13 @@ export default function DashboardPage() {
   const [studentLoginError, setStudentLoginError] = useState<string | null>(null);
 
   const [parentName, setParentName] = useState<string | null>(null);
+  const [parentEmail, setParentEmail] = useState<string | null>(null);
+  const isDemoAccount = isDemoAccountEmail(parentEmail);
+  // Actions (Simulate/Reset/delete/etc.) get their own dismissible banner --
+  // separate from `error`, which stays reserved for "we couldn't load your
+  // account at all" and replaces the whole page. A single failed button
+  // click shouldn't wipe out the dashboard and imply the session expired.
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const [showAddStudent, setShowAddStudent] = useState(false);
   const [addStudentName, setAddStudentName] = useState("");
@@ -495,9 +503,12 @@ export default function DashboardPage() {
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editAge, setEditAge] = useState(AGE_RANGES[2].key);
+  const [editPhone, setEditPhone] = useState("");
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [archiveBusyId, setArchiveBusyId] = useState<string | null>(null);
+
+  const [smsStatus, setSmsStatus] = useState<{ enabled: boolean; phone_number: string | null } | null>(null);
 
   const [deleteStudentTarget, setDeleteStudentTarget] = useState<Student | null>(null);
   const [deleteStudentBusy, setDeleteStudentBusy] = useState(false);
@@ -560,9 +571,18 @@ export default function DashboardPage() {
     loadFamilies();
     api
       .me()
-      .then((u) => setParentName(u.display_name))
+      .then((u) => {
+        setParentName(u.display_name);
+        setParentEmail(u.email);
+      })
       .catch(() => {
         /* non-fatal -- greeting just won't show a name */
+      });
+    api
+      .getSmsStatus()
+      .then(setSmsStatus)
+      .catch(() => {
+        /* non-fatal -- text-to-request explainer just won't show */
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -594,17 +614,26 @@ export default function DashboardPage() {
       if (selectedView === deleteStudentTarget.id) setSelectedView("");
       await loadFamilies();
     } catch (e: any) {
-      setError(e.message || "Could not delete this student.");
+      setActionError(e.message || "Could not delete this student.");
     } finally {
       setDeleteStudentBusy(false);
     }
   }
 
-  function startEditStudent(s: Student) {
+  async function startEditStudent(s: Student) {
     setEditingStudentId(s.id);
     setEditName(s.display_name);
     setEditAge(s.age_range || AGE_RANGES[2].key);
+    setEditPhone("");
     setEditError(null);
+    if (s.has_phone) {
+      try {
+        const status = await api.getStudentPhone(s.id);
+        setEditPhone(status.phone_number || "");
+      } catch {
+        /* non-fatal -- phone field just starts blank */
+      }
+    }
   }
 
   async function handleSaveEditStudent() {
@@ -613,6 +642,11 @@ export default function DashboardPage() {
     setEditError(null);
     try {
       await api.updateStudent(editingStudentId, { display_name: editName.trim(), age_range: editAge });
+      if (editPhone.trim()) {
+        await api.setStudentPhone(editingStudentId, editPhone.trim());
+      } else {
+        await api.clearStudentPhone(editingStudentId);
+      }
       setEditingStudentId(null);
       await loadFamilies();
     } catch (e: any) {
@@ -632,7 +666,7 @@ export default function DashboardPage() {
       }
       await loadFamilies();
     } catch (e: any) {
-      setError(e.message || "Could not update this student's archive status.");
+      setActionError(e.message || "Could not update this student's archive status.");
     } finally {
       setArchiveBusyId(null);
     }
@@ -648,7 +682,7 @@ export default function DashboardPage() {
       setClearHistoryDone(true);
       await refresh();
     } catch (e: any) {
-      setError(e.message || "Could not clear activity history.");
+      setActionError(e.message || "Could not clear activity history.");
     } finally {
       setClearHistoryBusy(false);
     }
@@ -665,7 +699,7 @@ export default function DashboardPage() {
       }
       await loadFamilies();
     } catch (e: any) {
-      setError(e.message || "Could not update sibling-manager permission.");
+      setActionError(e.message || "Could not update sibling-manager permission.");
     } finally {
       setSiblingManagerBusy(false);
     }
@@ -689,7 +723,7 @@ export default function DashboardPage() {
       await loadFamilies();
       await refresh();
     } catch (e: any) {
-      setError(e.message || "Could not reset demo data.");
+      setActionError(e.message || "Could not reset demo data.");
     } finally {
       setDemoBusy(false);
     }
@@ -703,7 +737,7 @@ export default function DashboardPage() {
       setSimSteps(result.steps || []);
       await refresh();
     } catch (e: any) {
-      setError(e.message || "Could not run the simulation.");
+      setActionError(e.message || "Could not run the simulation.");
     } finally {
       setSimBusy(false);
     }
@@ -805,7 +839,7 @@ export default function DashboardPage() {
       setHealth(h);
       setRules(r);
     } catch (e: any) {
-      setError(e.message);
+      setActionError(e.message);
     }
   }
 
@@ -830,7 +864,7 @@ export default function DashboardPage() {
       setAllowMoreTimeFor(null);
       await refresh();
     } catch (e: any) {
-      setError(e.message);
+      setActionError(e.message);
     }
   }
 
@@ -839,7 +873,7 @@ export default function DashboardPage() {
       await api.updateRule(rule.id, { active: !rule.active });
       await refresh();
     } catch (e: any) {
-      setError(e.message);
+      setActionError(e.message);
     }
   }
 
@@ -849,7 +883,7 @@ export default function DashboardPage() {
       await api.deleteRule(rule.id);
       await refresh();
     } catch (e: any) {
-      setError(e.message);
+      setActionError(e.message);
     }
   }
 
@@ -862,7 +896,7 @@ export default function DashboardPage() {
       setRegisteringDevice(false);
       await refresh();
     } catch (e: any) {
-      setError(e.message);
+      setActionError(e.message);
     }
   }
 
@@ -1019,6 +1053,18 @@ export default function DashboardPage() {
       <div className="container-wide">
         <h1>{parentName ? `Hi ${parentName} — Family overview` : "Family overview"}</h1>
 
+        {actionError && (
+          <p
+            className="card"
+            style={{ borderColor: "#fca5a5", background: "#fef2f2", color: "#991b1b", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, fontSize: 14 }}
+          >
+            <span>{actionError}</span>
+            <button type="button" className="link-button" style={{ color: "#991b1b" }} onClick={() => setActionError(null)}>
+              Dismiss
+            </button>
+          </p>
+        )}
+
         {familiesLoaded && families.length === 0 ? (
           <div className="card">
             <h2>Welcome to FocusSentinel</h2>
@@ -1072,7 +1118,7 @@ export default function DashboardPage() {
               <span>
                 {families[0]?.name || "Your family"} · {activeStudents.length} student{activeStudents.length === 1 ? "" : "s"}
               </span>
-              {isDemoFamily(families[0]?.name) && <span className="badge none">Demo · sample data</span>}
+              {isDemoAccount && <span className="badge none">Demo · sample data</span>}
               {setupStatus && !setupStatus.is_complete && setupReminderDismissed && (
                 <button
                   type="button"
@@ -1083,7 +1129,7 @@ export default function DashboardPage() {
                   Setup incomplete · {setupStatus.completed_steps} of {setupStatus.total_steps} steps
                 </button>
               )}
-              {isDemoFamily(families[0]?.name) && (
+              {isDemoAccount && (
                 <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
                   <button className="secondary" onClick={handleSimulate} disabled={simBusy || demoBusy}>
                     {simBusy ? "Simulating..." : "Simulate activity"}
@@ -1146,6 +1192,19 @@ export default function DashboardPage() {
                 Archiving hides a student from the dashboard and rule creation without deleting their history — reverse
                 it anytime with Unarchive. Delete removes them and their history permanently.
               </p>
+              {smsStatus?.enabled ? (
+                <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                  Add a student's phone number below (click Edit) to let them text{" "}
+                  <strong>{smsStatus.phone_number}</strong> to request more time — you'll get a text back to approve
+                  or deny with a simple reply, no need to open the dashboard.
+                </p>
+              ) : (
+                <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                  Texting to request time isn't turned on for this deployment yet (needs a Twilio number configured
+                  server-side). You can still save a student's phone number now — it'll start working once that's
+                  set up.
+                </p>
+              )}
               {showAddStudent && (
                 <form onSubmit={handleAddStudent} style={{ margin: "12px 0", padding: 12, background: "var(--accent-soft)", borderRadius: 10 }}>
                   <label htmlFor="add-student-name">Student's name</label>
@@ -1180,6 +1239,21 @@ export default function DashboardPage() {
                           </option>
                         ))}
                       </select>
+                      <label htmlFor={`edit-phone-${s.id}`}>
+                        Phone number {smsStatus?.enabled ? "(to text for more time)" : ""}
+                      </label>
+                      <input
+                        id={`edit-phone-${s.id}`}
+                        type="tel"
+                        placeholder="(555) 123-4567"
+                        value={editPhone}
+                        onChange={(e) => setEditPhone(e.target.value)}
+                      />
+                      <p className="muted" style={{ fontSize: 12, marginTop: -8 }}>
+                        {smsStatus?.enabled
+                          ? `Once set, ${s.display_name} can text ${smsStatus.phone_number} to ask for more time. Leave blank to remove.`
+                          : "Saved even before texting is turned on for this deployment -- leave blank to remove."}
+                      </p>
                       {editError && <p style={{ color: "#991b1b", fontSize: 13 }}>{editError}</p>}
                       <div style={{ display: "flex", gap: 8 }}>
                         <button onClick={handleSaveEditStudent} disabled={editBusy || !editName.trim()}>
@@ -1202,6 +1276,11 @@ export default function DashboardPage() {
                         {s.is_sibling_manager && (
                           <span className="badge none" style={{ marginLeft: 8, fontSize: 11 }}>
                             Manages siblings{s.sibling_manager_until ? ` until ${new Date(s.sibling_manager_until).toLocaleString()}` : ""}
+                          </span>
+                        )}
+                        {s.has_phone && (
+                          <span className="badge none" style={{ marginLeft: 8, fontSize: 11 }}>
+                            Can text for time
                           </span>
                         )}
                       </span>
@@ -1438,6 +1517,12 @@ export default function DashboardPage() {
 
                   <div className="card">
                     <h2>Pending extension requests</h2>
+                    {smsStatus?.enabled && pendingRequests.length > 0 && (
+                      <p className="muted" style={{ fontSize: 12, marginTop: -6 }}>
+                        If this came in by text, you can also reply YES or NO to that text instead of using the
+                        buttons below.
+                      </p>
+                    )}
                     {pendingRequests.length === 0 && <p className="muted">No pending requests.</p>}
                     {pendingRequests.map((r) => {
                       const rule = rules.find((ru) => ru.id === r.rule_id);
