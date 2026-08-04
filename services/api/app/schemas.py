@@ -115,6 +115,8 @@ class RuleCreate(BaseModel):
 
 class RuleUpdate(BaseModel):
     name: Optional[str] = None
+    student_id: Optional[str] = None
+    scope_category_key: Optional[str] = None
     website_ids: Optional[list[str]] = None
     days_of_week: Optional[list[int]] = None
     allowed_start: Optional[str] = None
@@ -198,15 +200,24 @@ class ExtensionRequestCreate(BaseModel):
 class ExtensionRequestOut(BaseModel):
     id: str
     student_id: str
+    rule_id: Optional[str] = None
     requested_minutes: Optional[int]
     reason_code: str
+    explanation: Optional[str] = None
     status: str
+    created_at: datetime
     model_config = {"from_attributes": True}
 
 
 class ExtensionDecision(BaseModel):
     minutes: Optional[int] = None
     rest_of_day: bool = False
+
+
+class ExtensionGrantRequest(BaseModel):
+    student_id: str
+    rule_id: str
+    minutes: int = Field(gt=0)
 
 
 # ---- Notification recipients ----
@@ -242,5 +253,6 @@ class DeviceHealthOut(BaseModel):
     device_id: str
     device_name: str
     status: str
+    platform_identifier: Optional[str] = None
     last_seen_at: Optional[datetime]
     permissions: dict[str, bool]

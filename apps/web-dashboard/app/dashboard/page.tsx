@@ -30,6 +30,10 @@ type Rule = {
   websites: Website[];
   daily_limit_minutes: number | null;
   warning_one_at_minutes: number;
+  warning_two_after_additional_minutes: number | null;
+  block_after_warning_two_seconds: number | null;
+  days_of_week: number[] | null;
+  reset_time: string | null;
   active: boolean;
 };
 
@@ -46,6 +50,26 @@ const CATEGORY_OPTIONS = [
   { key: "other", label: "Other" },
 ];
 
+const AGE_RANGES = [
+  { key: "under_8", label: "Under 8" },
+  { key: "8_12", label: "8–12" },
+  { key: "13_15", label: "13–15" },
+  { key: "16_17", label: "16–17" },
+  { key: "18_plus", label: "18+" },
+];
+
+const DAYS = [
+  { key: 0, label: "Mon" },
+  { key: 1, label: "Tue" },
+  { key: 2, label: "Wed" },
+  { key: 3, label: "Thu" },
+  { key: 4, label: "Fri" },
+  { key: 5, label: "Sat" },
+  { key: 6, label: "Sun" },
+];
+
+const EXTENSION_PRESETS = [10, 15, 30];
+
 function categoryLabel(key: string) {
   return CATEGORY_OPTIONS.find((c) => c.key === key)?.label || key.replace(/_/g, " ");
 }
@@ -54,6 +78,41 @@ function ruleDisplayLabel(rule: Rule) {
   if (rule.websites.length > 0) return rule.websites.map((w) => w.label).join(" + ");
   if (rule.scope_category_key) return categoryLabel(rule.scope_category_key);
   return rule.name;
+}
+
+function ruleSitesLine(rule: Rule) {
+  if (rule.websites.length > 0) return rule.websites.map((w) => w.label).join(", ");
+  if (rule.scope_category_key) return categoryLabel(rule.scope_category_key);
+  return "";
+}
+
+function relativeTime(iso: string | null | undefined) {
+  if (!iso) return "unknown";
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"} ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+function deviceStatusFor(status: string): { text: string; cls: string; needsAttention: boolean } {
+  switch (status) {
+    case "connected":
+      return { text: "Connected", cls: "connected", needsAttention: false };
+    case "delayed":
+      return { text: "Delayed", cls: "delayed", needsAttention: true };
+    case "offline":
+      return { text: "Offline", cls: "offline", needsAttention: true };
+    case "permission_issue":
+      return { text: "Permission Issue", cls: "permission_issue", needsAttention: true };
+    case "revoked":
+      return { text: "Revoked", cls: "revoked", needsAttention: true };
+    default:
+      return { text: status, cls: "none", needsAttention: false };
+  }
 }
 
 function usageStatusFor(usage: TodayUsage | null, ruleId: string, percent: number) {
@@ -67,36 +126,326 @@ function usageStatusFor(usage: TodayUsage | null, ruleId: string, percent: numbe
   return { text: "Within limit", cls: "none" };
 }
 
+type RuleModalState = {
+  mode: "create" | "edit";
+  ruleId?: string;
+  studentId: string;
+  name: string;
+  scopeMode: "category" | "websites";
+  category: string;
+  websiteIds: string[];
+  limit: string;
+  warningOne: string;
+  warningTwoAfter: string;
+  blockAfterSeconds: string;
+  daysOfWeek: number[];
+  resetTime: string;
+};
+
+function RuleFormModal({
+  state,
+  setState,
+  students,
+  websiteCatalog,
+  onAddCustomWebsite,
+  onSubmit,
+  onClose,
+  onDelete,
+  busy,
+  error,
+}: {
+  state: RuleModalState;
+  setState: (updater: (prev: RuleModalState) => RuleModalState) => void;
+  students: Student[];
+  websiteCatalog: Website[];
+  onAddCustomWebsite: (domain: string, label: string) => Promise<Website | null>;
+  onSubmit: () => void;
+  onClose: () => void;
+  onDelete?: () => void;
+  busy: boolean;
+  error: string | null;
+}) {
+  const [websiteSearch, setWebsiteSearch] = useState("");
+  const [customDomain, setCustomDomain] = useState("");
+  const [customLabel, setCustomLabel] = useState("");
+  const [addingCustom, setAddingCustom] = useState(false);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  async function handleAddCustom() {
+    if (!customDomain.trim()) return;
+    setAddingCustom(true);
+    try {
+      const site = await onAddCustomWebsite(customDomain.trim(), customLabel.trim() || customDomain.trim());
+      if (site) {
+        setState((prev) => (prev.websiteIds.includes(site.id) ? prev : { ...prev, websiteIds: [...prev.websiteIds, site.id] }));
+        setCustomDomain("");
+        setCustomLabel("");
+      }
+    } finally {
+      setAddingCustom(false);
+    }
+  }
+
+  return (
+    <div role="presentation" className="modal-backdrop" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="rule-modal-title"
+        onClick={(e) => e.stopPropagation()}
+        className="card modal-body"
+      >
+        <h2 id="rule-modal-title">{state.mode === "create" ? "New screen-time rule" : "Edit rule"}</h2>
+
+        <label htmlFor="rule-name">Rule name</label>
+        <input id="rule-name" value={state.name} onChange={(e) => setState((p) => ({ ...p, name: e.target.value }))} placeholder="e.g. Short-form video limit" />
+
+        {students.length > 1 && (
+          <>
+            <label htmlFor="rule-student">Student</label>
+            <select id="rule-student" value={state.studentId} onChange={(e) => setState((p) => ({ ...p, studentId: e.target.value }))}>
+              {students.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.display_name}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+
+        <fieldset style={{ border: "none", padding: 0, margin: "8px 0 12px" }}>
+          <legend className="muted" style={{ fontSize: 13, marginBottom: 4 }}>
+            What should this limit cover?
+          </legend>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 4, marginRight: 16, fontWeight: 400 }}>
+            <input type="radio" checked={state.scopeMode === "category"} onChange={() => setState((p) => ({ ...p, scopeMode: "category" }))} />
+            A whole category
+          </label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontWeight: 400 }}>
+            <input type="radio" checked={state.scopeMode === "websites"} onChange={() => setState((p) => ({ ...p, scopeMode: "websites" }))} />
+            Specific websites
+          </label>
+        </fieldset>
+
+        {state.scopeMode === "category" ? (
+          <>
+            <label htmlFor="rule-category">Category</label>
+            <select id="rule-category" value={state.category} onChange={(e) => setState((p) => ({ ...p, category: e.target.value }))}>
+              {CATEGORY_OPTIONS.map((c) => (
+                <option key={c.key} value={c.key}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </>
+        ) : (
+          <div style={{ marginBottom: 12 }}>
+            <label htmlFor="rule-website-search">Websites</label>
+            {state.websiteIds.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                {websiteCatalog
+                  .filter((w) => state.websiteIds.includes(w.id))
+                  .map((w) => (
+                    <span key={w.id} className="badge none" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      {w.label}
+                      <button
+                        type="button"
+                        aria-label={`Remove ${w.label}`}
+                        onClick={() => setState((p) => ({ ...p, websiteIds: p.websiteIds.filter((id) => id !== w.id) }))}
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: 0, color: "inherit" }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+              </div>
+            )}
+            <input
+              id="rule-website-search"
+              placeholder="Search TikTok, YouTube Shorts, Instagram Reels..."
+              value={websiteSearch}
+              onChange={(e) => setWebsiteSearch(e.target.value)}
+            />
+            <div
+              role="listbox"
+              aria-label="Website search results"
+              style={{ maxHeight: 140, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8, marginTop: 6 }}
+            >
+              {websiteCatalog
+                .filter((w) => !state.websiteIds.includes(w.id))
+                .filter((w) => w.label.toLowerCase().includes(websiteSearch.toLowerCase()) || w.domain.includes(websiteSearch.toLowerCase()))
+                .slice(0, 8)
+                .map((w) => (
+                  <button
+                    key={w.id}
+                    type="button"
+                    role="option"
+                    aria-selected={false}
+                    onClick={() => setState((p) => ({ ...p, websiteIds: [...p.websiteIds, w.id] }))}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "6px 10px",
+                      background: "none",
+                      border: "none",
+                      borderBottom: "1px solid var(--border)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {w.label} <span className="muted" style={{ fontSize: 12 }}>{w.domain}{w.url_pattern || ""}</span>
+                  </button>
+                ))}
+              {websiteCatalog.length === 0 && (
+                <p className="muted" style={{ fontSize: 13, padding: "6px 10px" }}>
+                  Loading website catalog...
+                </p>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+              <input
+                placeholder="Custom domain"
+                value={customDomain}
+                onChange={(e) => setCustomDomain(e.target.value)}
+                style={{ flex: "1 1 140px", marginBottom: 0 }}
+                aria-label="Custom domain"
+              />
+              <input
+                placeholder="Label (optional)"
+                value={customLabel}
+                onChange={(e) => setCustomLabel(e.target.value)}
+                style={{ flex: "1 1 120px", marginBottom: 0 }}
+                aria-label="Custom website label"
+              />
+              <button type="button" className="secondary" disabled={addingCustom || !customDomain.trim()} onClick={handleAddCustom}>
+                {addingCustom ? "Adding..." : "Add domain"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <label htmlFor="rule-limit">Daily limit (minutes)</label>
+        <input id="rule-limit" type="number" min={1} value={state.limit} onChange={(e) => setState((p) => ({ ...p, limit: e.target.value }))} />
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label htmlFor="rule-warn1">First warning at (min)</label>
+            <input id="rule-warn1" type="number" min={1} value={state.warningOne} onChange={(e) => setState((p) => ({ ...p, warningOne: e.target.value }))} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label htmlFor="rule-warn2">2nd warning after (+min)</label>
+            <input id="rule-warn2" type="number" min={0} value={state.warningTwoAfter} onChange={(e) => setState((p) => ({ ...p, warningTwoAfter: e.target.value }))} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label htmlFor="rule-grace">Grace period (sec)</label>
+            <input id="rule-grace" type="number" min={0} value={state.blockAfterSeconds} onChange={(e) => setState((p) => ({ ...p, blockAfterSeconds: e.target.value }))} />
+          </div>
+        </div>
+
+        <label>Active days</label>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+          {DAYS.map((d) => {
+            const on = state.daysOfWeek.includes(d.key);
+            return (
+              <button
+                key={d.key}
+                type="button"
+                className={on ? "" : "secondary"}
+                style={{ padding: "4px 10px", fontSize: 12, marginLeft: 0 }}
+                onClick={() =>
+                  setState((p) => ({
+                    ...p,
+                    daysOfWeek: on ? p.daysOfWeek.filter((x) => x !== d.key) : [...p.daysOfWeek, d.key],
+                  }))
+                }
+              >
+                {d.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <label htmlFor="rule-reset">Resets at</label>
+        <input id="rule-reset" type="time" value={state.resetTime} onChange={(e) => setState((p) => ({ ...p, resetTime: e.target.value }))} />
+
+        {error && <p style={{ color: "#991b1b", fontSize: 13 }}>{error}</p>}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <button type="button" onClick={onSubmit} disabled={busy}>
+            {busy ? "Saving..." : state.mode === "create" ? "Add rule" : "Save changes"}
+          </button>
+          <button type="button" className="secondary" onClick={onClose}>
+            Cancel
+          </button>
+          {state.mode === "edit" && onDelete && (
+            <button type="button" className="danger" style={{ marginLeft: "auto" }} onClick={onDelete}>
+              Delete
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [families, setFamilies] = useState<{ id: string; name: string }[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
-  const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
+  const [selectedView, setSelectedView] = useState<string>("");
+  const focusedStudentId = selectedView && selectedView !== "all" ? selectedView : null;
+  const focusedStudent = students.find((s) => s.id === focusedStudentId) || null;
+
   const [usage, setUsage] = useState<TodayUsage | null>(null);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]);
   const [health, setHealth] = useState<any[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
-  const [editLimits, setEditLimits] = useState<Record<string, string>>({});
-  const [savingRuleId, setSavingRuleId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [familiesLoaded, setFamiliesLoaded] = useState(false);
   const [demoBusy, setDemoBusy] = useState(false);
   const [simSteps, setSimSteps] = useState<any[] | null>(null);
   const [simBusy, setSimBusy] = useState(false);
 
-  const [showNewRule, setShowNewRule] = useState(false);
-  const [scopeMode, setScopeMode] = useState<"category" | "websites">("category");
-  const [newCategory, setNewCategory] = useState(CATEGORY_OPTIONS[0].key);
-  const [newLimit, setNewLimit] = useState("30");
-  const [creatingRule, setCreatingRule] = useState(false);
-  const [ruleError, setRuleError] = useState<string | null>(null);
-
   const [websiteCatalog, setWebsiteCatalog] = useState<Website[]>([]);
-  const [websiteSearch, setWebsiteSearch] = useState("");
-  const [selectedWebsiteIds, setSelectedWebsiteIds] = useState<string[]>([]);
-  const [customDomain, setCustomDomain] = useState("");
-  const [customLabel, setCustomLabel] = useState("");
-  const [addingCustomWebsite, setAddingCustomWebsite] = useState(false);
+
+  const [ruleModal, setRuleModal] = useState<RuleModalState | null>(null);
+  const [ruleModalBusy, setRuleModalBusy] = useState(false);
+  const [ruleModalError, setRuleModalError] = useState<string | null>(null);
+
+  const [troubleshootDevice, setTroubleshootDevice] = useState<any | null>(null);
+  const [registeringDevice, setRegisteringDevice] = useState(false);
+  const [newDeviceName, setNewDeviceName] = useState("");
+  const [deviceTokenModal, setDeviceTokenModal] = useState<{ name: string; token: string } | null>(null);
+
+  const [customAmounts, setCustomAmounts] = useState<Record<string, string>>({});
+  const [allowMoreTimeFor, setAllowMoreTimeFor] = useState<string | null>(null);
+
+  const [obStudentName, setObStudentName] = useState("");
+  const [obAgeRange, setObAgeRange] = useState(AGE_RANGES[2].key);
+  const [obBusy, setObBusy] = useState(false);
+  const [obError, setObError] = useState<string | null>(null);
+
+  const [allSummary, setAllSummary] = useState<Record<string, { restricted: boolean; rulesCount: number }>>({});
+  const [allSummaryLoading, setAllSummaryLoading] = useState(false);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setTroubleshootDevice(null);
+        setDeviceTokenModal(null);
+        setSimSteps(null);
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
   async function loadFamilies() {
     try {
@@ -105,10 +454,10 @@ export default function DashboardPage() {
       if (fams.length > 0) {
         const s = await api.listStudents(fams[0].id);
         setStudents(s);
-        if (s.length > 0) setSelectedStudent(s[0].id);
+        if (s.length > 0) setSelectedView((prev) => (prev && s.some((st: Student) => st.id === prev)) || prev === "all" ? prev : s[0].id);
       } else {
         setStudents([]);
-        setSelectedStudent(null);
+        setSelectedView("");
       }
     } catch (e: any) {
       setError(e.message || "Please sign in again.");
@@ -128,7 +477,7 @@ export default function DashboardPage() {
       .websitesCatalog(families[0].id)
       .then(setWebsiteCatalog)
       .catch(() => {
-        /* non-fatal — the website multi-select just won't have options yet */
+        /* non-fatal -- the website multi-select just won't have options yet */
       });
   }, [families]);
 
@@ -172,22 +521,57 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleOnboard(e: React.FormEvent) {
+    e.preventDefault();
+    if (!obStudentName.trim()) return;
+    setObBusy(true);
+    setObError(null);
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      const family = await api.createFamily("My Family", tz);
+      await api.createStudent(family.id, obStudentName.trim(), obAgeRange, tz);
+      setObStudentName("");
+      await loadFamilies();
+    } catch (e: any) {
+      setObError(e.message || "Could not set up your family.");
+    } finally {
+      setObBusy(false);
+    }
+  }
+
   useEffect(() => {
-    if (!selectedStudent) return;
+    if (!focusedStudentId) return;
     refresh();
     const interval = setInterval(refresh, 10_000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedStudent]);
+  }, [focusedStudentId]);
+
+  useEffect(() => {
+    if (selectedView !== "all" || students.length === 0) return;
+    setAllSummaryLoading(true);
+    Promise.all(
+      students.map(async (s) => {
+        try {
+          const [u, r] = await Promise.all([api.usageToday(s.id), api.listRules(s.id)]);
+          return [s.id, { restricted: (u.active_restrictions || []).length > 0, rulesCount: r.length }] as const;
+        } catch {
+          return [s.id, { restricted: false, rulesCount: 0 }] as const;
+        }
+      })
+    )
+      .then((entries) => setAllSummary(Object.fromEntries(entries)))
+      .finally(() => setAllSummaryLoading(false));
+  }, [selectedView, students]);
 
   async function refresh() {
-    if (!selectedStudent) return;
+    if (!focusedStudentId) return;
     try {
       const [u, reqs, h, r] = await Promise.all([
-        api.usageToday(selectedStudent),
-        api.listExtensionRequests(selectedStudent, "pending"),
-        api.deviceHealth(selectedStudent),
-        api.listRules(selectedStudent),
+        api.usageToday(focusedStudentId),
+        api.listExtensionRequests(focusedStudentId, "pending"),
+        api.deviceHealth(focusedStudentId),
+        api.listRules(focusedStudentId),
       ]);
       setUsage(u);
       setPendingRequests(reqs);
@@ -196,6 +580,10 @@ export default function DashboardPage() {
     } catch (e: any) {
       setError(e.message);
     }
+  }
+
+  function scrollToUsage() {
+    document.getElementById("today-usage")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   async function handleApprove(id: string, minutes: number) {
@@ -208,105 +596,161 @@ export default function DashboardPage() {
     refresh();
   }
 
-  function limitValueFor(rule: Rule) {
-    return editLimits[rule.id] ?? String(rule.daily_limit_minutes ?? "");
-  }
-
-  async function handleSaveLimit(rule: Rule) {
-    const raw = limitValueFor(rule);
-    const minutes = Number(raw);
-    if (!raw || Number.isNaN(minutes) || minutes <= 0) return;
-    setSavingRuleId(rule.id);
+  async function handleAllowMoreTime(ruleId: string, minutes: number) {
+    if (!focusedStudentId) return;
     try {
-      await api.updateRule(rule.id, { daily_limit_minutes: minutes });
+      await api.grantExtension(focusedStudentId, ruleId, minutes);
+      setAllowMoreTimeFor(null);
       await refresh();
     } catch (e: any) {
       setError(e.message);
-    } finally {
-      setSavingRuleId(null);
     }
   }
 
-  async function handleAddCustomWebsite() {
-    if (!customDomain.trim() || !families[0]?.id) return;
-    setAddingCustomWebsite(true);
-    setRuleError(null);
+  async function handleTogglePause(rule: Rule) {
     try {
-      const site: Website = await api.addWebsite({
-        family_id: families[0].id,
-        domain: customDomain.trim(),
-        label: customLabel.trim() || customDomain.trim(),
-        category_key: "other",
-      });
-      setWebsiteCatalog((prev) => (prev.some((w) => w.id === site.id) ? prev : [...prev, site]));
-      setSelectedWebsiteIds((prev) => (prev.includes(site.id) ? prev : [...prev, site.id]));
-      setCustomDomain("");
-      setCustomLabel("");
-    } catch (e: any) {
-      setRuleError(e.message || "Could not add that website — check the domain format.");
-    } finally {
-      setAddingCustomWebsite(false);
-    }
-  }
-
-  function resetRuleForm() {
-    setNewLimit("30");
-    setSelectedWebsiteIds([]);
-    setWebsiteSearch("");
-    setCustomDomain("");
-    setCustomLabel("");
-    setScopeMode("category");
-    setShowNewRule(false);
-    setRuleError(null);
-  }
-
-  async function handleCreateRule(e: React.FormEvent) {
-    e.preventDefault();
-    if (!selectedStudent) return;
-    const minutes = Number(newLimit);
-    if (!newLimit || Number.isNaN(minutes) || minutes <= 0) {
-      setRuleError("Enter a limit greater than 0 minutes.");
-      return;
-    }
-    if (scopeMode === "websites" && selectedWebsiteIds.length === 0) {
-      setRuleError("Select at least one website, or switch to a category limit.");
-      return;
-    }
-    setCreatingRule(true);
-    setRuleError(null);
-    try {
-      if (scopeMode === "websites") {
-        const chosen = websiteCatalog.filter((w) => selectedWebsiteIds.includes(w.id));
-        const name = chosen.map((w) => w.label).join(" + ") || "Website limit";
-        await api.createRule({
-          student_id: selectedStudent,
-          name,
-          scope_type: "website",
-          website_ids: selectedWebsiteIds,
-          daily_limit_minutes: minutes,
-          warning_one_at_minutes: minutes,
-          warning_two_after_additional_minutes: Math.max(1, Math.round(minutes * 0.25)),
-          block_after_warning_two_seconds: 60,
-        });
-      } else {
-        const label = CATEGORY_OPTIONS.find((c) => c.key === newCategory)?.label || newCategory;
-        await api.createRule({
-          student_id: selectedStudent,
-          name: `${label} limit`,
-          scope_type: "category",
-          scope_category_key: newCategory,
-          daily_limit_minutes: minutes,
-          warning_one_at_minutes: minutes,
-          warning_two_after_additional_minutes: Math.max(1, Math.round(minutes * 0.25)),
-          block_after_warning_two_seconds: 60,
-        });
-      }
-      resetRuleForm();
+      await api.updateRule(rule.id, { active: !rule.active });
       await refresh();
     } catch (e: any) {
-      setRuleError(e.message || "Could not create rule.");
+      setError(e.message);
+    }
+  }
+
+  async function handleDeleteRule(rule: Rule) {
+    if (!window.confirm(`Delete "${rule.name}"? This can't be undone.`)) return;
+    try {
+      await api.deleteRule(rule.id);
+      await refresh();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  async function handleRegisterDevice() {
+    if (!focusedStudentId || !newDeviceName.trim()) return;
+    try {
+      const result = await api.registerDevice({ student_id: focusedStudentId, device_type: "browser_extension", name: newDeviceName.trim() });
+      setDeviceTokenModal({ name: newDeviceName.trim(), token: result.device_token });
+      setNewDeviceName("");
+      setRegisteringDevice(false);
+      await refresh();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  async function handleAddCustomWebsiteGlobal(domain: string, label: string): Promise<Website | null> {
+    if (!families[0]?.id) return null;
+    try {
+      const site: Website = await api.addWebsite({ family_id: families[0].id, domain, label, category_key: "other" });
+      setWebsiteCatalog((prev) => (prev.some((w) => w.id === site.id) ? prev : [...prev, site]));
+      return site;
+    } catch (e: any) {
+      setRuleModalError(e.message || "Could not add that website — check the domain format.");
+      return null;
+    }
+  }
+
+  function openNewRule() {
+    if (!focusedStudentId) return;
+    setRuleModalError(null);
+    setRuleModal({
+      mode: "create",
+      studentId: focusedStudentId,
+      name: "",
+      scopeMode: "category",
+      category: CATEGORY_OPTIONS[0].key,
+      websiteIds: [],
+      limit: "30",
+      warningOne: "24",
+      warningTwoAfter: "3",
+      blockAfterSeconds: "60",
+      daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+      resetTime: "00:00",
+    });
+  }
+
+  function openEditRule(rule: Rule) {
+    setRuleModalError(null);
+    setRuleModal({
+      mode: "edit",
+      ruleId: rule.id,
+      studentId: rule.student_id,
+      name: rule.name,
+      scopeMode: rule.websites.length > 0 ? "websites" : "category",
+      category: rule.scope_category_key || CATEGORY_OPTIONS[0].key,
+      websiteIds: rule.websites.map((w) => w.id),
+      limit: String(rule.daily_limit_minutes ?? ""),
+      warningOne: String(rule.warning_one_at_minutes ?? ""),
+      warningTwoAfter: String(rule.warning_two_after_additional_minutes ?? 5),
+      blockAfterSeconds: String(rule.block_after_warning_two_seconds ?? 60),
+      daysOfWeek: rule.days_of_week && rule.days_of_week.length ? rule.days_of_week : [0, 1, 2, 3, 4, 5, 6],
+      resetTime: rule.reset_time || "00:00",
+    });
+  }
+
+  async function handleSubmitRuleModal() {
+    if (!ruleModal) return;
+    const limit = Number(ruleModal.limit);
+    const warnOne = Number(ruleModal.warningOne);
+    if (!ruleModal.limit || Number.isNaN(limit) || limit <= 0) {
+      setRuleModalError("Enter a limit greater than 0 minutes.");
+      return;
+    }
+    if (ruleModal.scopeMode === "websites" && ruleModal.websiteIds.length === 0) {
+      setRuleModalError("Select at least one website, or switch to a category limit.");
+      return;
+    }
+    setRuleModalBusy(true);
+    setRuleModalError(null);
+    try {
+      const payload: Record<string, unknown> = {
+        name:
+          ruleModal.name.trim() ||
+          (ruleModal.scopeMode === "category"
+            ? `${CATEGORY_OPTIONS.find((c) => c.key === ruleModal.category)?.label || ruleModal.category} limit`
+            : "Website limit"),
+        daily_limit_minutes: limit,
+        warning_one_at_minutes: warnOne || limit,
+        warning_two_after_additional_minutes: Number(ruleModal.warningTwoAfter) || 1,
+        block_after_warning_two_seconds: Number(ruleModal.blockAfterSeconds) || 60,
+        days_of_week: ruleModal.daysOfWeek,
+        reset_time: ruleModal.resetTime,
+        student_id: ruleModal.studentId,
+      };
+      if (ruleModal.scopeMode === "category") {
+        payload.scope_category_key = ruleModal.category;
+      } else {
+        payload.website_ids = ruleModal.websiteIds;
+      }
+
+      if (ruleModal.mode === "create") {
+        payload.scope_type = ruleModal.scopeMode === "category" ? "category" : "website";
+        await api.createRule(payload);
+      } else if (ruleModal.ruleId) {
+        await api.updateRule(ruleModal.ruleId, payload);
+      }
+      setRuleModal(null);
+      await refresh();
+    } catch (e: any) {
+      setRuleModalError(e.message || "Could not save this rule.");
     } finally {
-      setCreatingRule(false);
+      setRuleModalBusy(false);
+    }
+  }
+
+  async function handleDeleteFromModal() {
+    if (!ruleModal?.ruleId) return;
+    if (!window.confirm(`Delete "${ruleModal.name || "this rule"}"? This can't be undone.`)) return;
+    setRuleModalBusy(true);
+    try {
+      await api.deleteRule(ruleModal.ruleId);
+      setRuleModal(null);
+      await refresh();
+    } catch (e: any) {
+      setRuleModalError(e.message);
+    } finally {
+      setRuleModalBusy(false);
     }
   }
 
@@ -334,21 +778,45 @@ export default function DashboardPage() {
           </a>
         }
       />
-      <div className="container">
+      <div className="container-wide">
         <h1>Family overview</h1>
 
         {familiesLoaded && families.length === 0 ? (
           <div className="card">
-            <h2>No family set up yet</h2>
-            <p className="muted">
-              Create a family from the API directly, or load a self-contained sample family — a
-              student, a Chrome extension, two rules, some usage, a warning, and a pending
-              request — to see how FocusSentinel works. Sample data is clearly labeled and never
-              mixed with a real account's data.
+            <h2>Welcome to FocusSentinel</h2>
+            <p className="muted">Set up your family to begin managing healthier screen-time habits.</p>
+            <ul className="checklist">
+              <li>
+                <span className="check-dot done">✓</span> Create your account
+              </li>
+              <li>
+                <span className="check-dot">2</span> Add your first student
+              </li>
+            </ul>
+            <form onSubmit={handleOnboard} style={{ marginTop: 8 }}>
+              <label htmlFor="ob-name">Student's name</label>
+              <input id="ob-name" value={obStudentName} onChange={(e) => setObStudentName(e.target.value)} required />
+              <label htmlFor="ob-age">Age range</label>
+              <select id="ob-age" value={obAgeRange} onChange={(e) => setObAgeRange(e.target.value)}>
+                {AGE_RANGES.map((a) => (
+                  <option key={a.key} value={a.key}>
+                    {a.label}
+                  </option>
+                ))}
+              </select>
+              {obError && <p style={{ color: "#991b1b", fontSize: 13 }}>{obError}</p>}
+              <button type="submit" disabled={obBusy}>
+                {obBusy ? "Setting up..." : "Add your first student"}
+              </button>
+            </form>
+            <p className="muted" style={{ fontSize: 12, marginTop: 12 }}>
+              Once your student is added, you can create screen-time rules and connect a device from the dashboard below.
             </p>
-            <button onClick={handleLoadDemo} disabled={demoBusy}>
-              {demoBusy ? "Loading..." : "Load Demo Family"}
-            </button>
+            <div style={{ borderTop: "1px solid var(--border)", marginTop: 16, paddingTop: 16 }}>
+              <button className="secondary" onClick={handleLoadDemo} disabled={demoBusy}>
+                {demoBusy ? "Loading..." : "Explore with sample data instead"}
+              </button>
+            </div>
           </div>
         ) : (
           <>
@@ -369,315 +837,419 @@ export default function DashboardPage() {
               )}
             </p>
 
-            {simSteps && (
-              <div className="card" style={{ borderColor: "var(--accent)" }}>
-                <h2>Demo simulation</h2>
-                <p className="muted" style={{ fontSize: 13 }}>
-                  This just ran real usage through the actual rules engine and warning/restriction
-                  pipeline on the demo student's gaming limit — it is not real browser-extension
-                  activity.
-                </p>
-                {simSteps.length === 0 ? (
-                  <p className="muted">Already at the end of the sequence — reset the demo to run it again from the start.</p>
-                ) : (
-                  simSteps.map((s, i) => (
-                    <div className="row" key={i}>
-                      <span className={`badge ${s.level === "restricted" ? "restricted" : s.level === "warning_two" ? "warning_two" : s.level === "warning_one" ? "warning_one" : "none"}`}>
-                        {s.level.replace(/_/g, " ")}
-                      </span>
-                      <span className="muted" style={{ fontSize: 13 }}>{s.message}</span>
-                    </div>
-                  ))
-                )}
-                <p className="muted" style={{ fontSize: 13, marginTop: 8, marginBottom: 0 }}>
-                  A new extension request from Alex should now be waiting below for you to approve or deny.
-                </p>
-              </div>
-            )}
-
-            {students.length > 1 && (
-              <select value={selectedStudent || ""} onChange={(e) => setSelectedStudent(e.target.value)}>
-                {students.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.display_name}
-                  </option>
-                ))}
-              </select>
-            )}
-
-        <div className="card">
-          <h2>Today's usage</h2>
-          {rules.length === 0 ? (
-            <p className="muted">No tracked activity yet today.</p>
-          ) : (
-            rules.map((rule) => {
-              const label = ruleDisplayLabel(rule);
-              const seconds = usage?.total_seconds_by_rule[rule.id] || 0;
-              const minutesUsed = seconds / 60;
-              const limit = rule.daily_limit_minutes || 0;
-              const remaining = Math.max(0, limit - minutesUsed);
-              const percent = limit > 0 ? Math.min(100, Math.round((minutesUsed / limit) * 100)) : 0;
-              const status = usageStatusFor(usage, rule.id, percent);
-              return (
-                <div key={rule.id} style={{ marginBottom: 16 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-                    <strong>{label}</strong>
-                    <span className={`badge ${status.cls}`}>{status.text}</span>
-                  </div>
-                  <p className="muted" style={{ margin: "0 0 6px", fontSize: 13 }}>
-                    {Math.round(minutesUsed)} of {limit} minutes used · {Math.round(remaining)} minutes remaining · {percent}%
-                  </p>
-                  <div
-                    role="progressbar"
-                    aria-valuenow={percent}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-label={`${label} usage`}
-                    style={{ background: "var(--border)", borderRadius: 999, height: 8, overflow: "hidden" }}
-                  >
-                    <div
-                      style={{
-                        width: `${percent}%`,
-                        height: "100%",
-                        borderRadius: 999,
-                        background:
-                          status.cls === "restricted" ? "#991b1b" : status.cls === "warning_two" ? "#c2410c" : status.cls === "warning_one" ? "#b45309" : "#2563eb",
-                        transition: "width 0.3s ease",
-                      }}
-                    />
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-
-        <div className="card">
-          <h2>Active warnings & restrictions</h2>
-          {usage && usage.active_restrictions.length > 0 ? (
-            usage.active_restrictions.map((r, i) => (
-              <div className="row" key={i}>
-                <span>
-                  <span className="badge restricted">restricted</span> {r.reason}
-                </span>
-                <span className="muted">resets {new Date(r.scheduled_reset_at).toLocaleTimeString()}</span>
-              </div>
-            ))
-          ) : usage && usage.active_warnings.length > 0 ? (
-            usage.active_warnings.map((w, i) => (
-              <div className="row" key={i}>
-                <span className={`badge warning_${w.level === 1 ? "one" : "two"}`}>warning {w.level}</span>
-              </div>
-            ))
-          ) : (
-            <p className="muted">Nothing to review right now — usage is within today's limits.</p>
-          )}
-        </div>
-
-        <div className="card">
-          <h2>Screen-time rules</h2>
-          {rules.length === 0 && <p className="muted">No rules set yet for this student.</p>}
-          {rules.map((rule) => (
-            <div className="row" key={rule.id}>
-              <span>
-                {rule.name}
-                {rule.websites.length > 0 && (
-                  <span className="muted" style={{ display: "block", fontSize: 12 }}>
-                    {rule.websites.map((w) => w.label).join(", ")}
+            {students.length > 0 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+                <label htmlFor="student-select" style={{ margin: 0, whiteSpace: "nowrap" }}>
+                  Viewing
+                </label>
+                <select id="student-select" value={selectedView} onChange={(e) => setSelectedView(e.target.value)} style={{ width: "auto", marginBottom: 0 }}>
+                  {students.length > 1 && <option value="all">All students</option>}
+                  {students.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.display_name}
+                    </option>
+                  ))}
+                </select>
+                {focusedStudentId && (
+                  <span className="muted" style={{ fontSize: 13 }}>
+                    Everything below reflects this student.
                   </span>
                 )}
-                {!rule.active && <span className="muted"> (inactive)</span>}
-              </span>
-              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input
-                  type="number"
-                  min={1}
-                  value={limitValueFor(rule)}
-                  onChange={(e) => setEditLimits((prev) => ({ ...prev, [rule.id]: e.target.value }))}
-                  style={{ width: 70, marginBottom: 0 }}
-                />
-                <span className="muted" style={{ fontSize: 13 }}>min/day</span>
-                <button
-                  className="secondary"
-                  disabled={savingRuleId === rule.id}
-                  onClick={() => handleSaveLimit(rule)}
-                >
-                  {savingRuleId === rule.id ? "Saving..." : "Save"}
-                </button>
-              </span>
-            </div>
-          ))}
+              </div>
+            )}
 
-          {showNewRule ? (
-            <form onSubmit={handleCreateRule} style={{ marginTop: 16, borderTop: "1px solid var(--border)", paddingTop: 16 }}>
-              <fieldset style={{ border: "none", padding: 0, margin: "0 0 12px" }}>
-                <legend className="muted" style={{ fontSize: 13, marginBottom: 4 }}>What should this limit cover?</legend>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 4, marginRight: 16, fontWeight: 400 }}>
-                  <input type="radio" checked={scopeMode === "category"} onChange={() => setScopeMode("category")} />
-                  A whole category
-                </label>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontWeight: 400 }}>
-                  <input type="radio" checked={scopeMode === "websites"} onChange={() => setScopeMode("websites")} />
-                  Specific websites
-                </label>
-              </fieldset>
-
-              {scopeMode === "category" ? (
-                <>
-                  <label htmlFor="new-rule-category">Category</label>
-                  <select id="new-rule-category" value={newCategory} onChange={(e) => setNewCategory(e.target.value)}>
-                    {CATEGORY_OPTIONS.map((c) => (
-                      <option key={c.key} value={c.key}>
-                        {c.label}
-                      </option>
-                    ))}
-                  </select>
-                </>
-              ) : (
-                <div style={{ marginBottom: 12 }}>
-                  <label htmlFor="website-search">Websites (search or pick from the list)</label>
-                  {selectedWebsiteIds.length > 0 && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-                      {websiteCatalog
-                        .filter((w) => selectedWebsiteIds.includes(w.id))
-                        .map((w) => (
-                          <span key={w.id} className="badge none" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                            {w.label}
-                            <button
-                              type="button"
-                              aria-label={`Remove ${w.label}`}
-                              onClick={() => setSelectedWebsiteIds((prev) => prev.filter((id) => id !== w.id))}
-                              style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1, color: "inherit" }}
+            {selectedView === "all" ? (
+              <div className="card">
+                <h2>All students</h2>
+                {allSummaryLoading && <p className="muted">Loading...</p>}
+                {students.map((s) => (
+                  <div className="row" key={s.id}>
+                    <span>{s.display_name}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span className="muted" style={{ fontSize: 13 }}>
+                        {allSummary[s.id]?.rulesCount ?? 0} rule{(allSummary[s.id]?.rulesCount ?? 0) === 1 ? "" : "s"}
+                        {allSummary[s.id]?.restricted ? " · restricted" : ""}
+                      </span>
+                      <button className="secondary" onClick={() => setSelectedView(s.id)}>
+                        View
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="dashboard-grid">
+                <div className="dashboard-col">
+                  <div className="card" id="today-usage">
+                    <h2>Today's usage</h2>
+                    {rules.length === 0 ? (
+                      <p className="muted">No tracked activity yet today.</p>
+                    ) : (
+                      rules.map((rule) => {
+                        const label = ruleDisplayLabel(rule);
+                        const seconds = usage?.total_seconds_by_rule[rule.id] || 0;
+                        const minutesUsed = seconds / 60;
+                        const limit = rule.daily_limit_minutes || 0;
+                        const remaining = Math.max(0, limit - minutesUsed);
+                        const percent = limit > 0 ? Math.min(100, Math.round((minutesUsed / limit) * 100)) : 0;
+                        const status = usageStatusFor(usage, rule.id, percent);
+                        return (
+                          <div key={rule.id} style={{ marginBottom: 16 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                              <strong>{label}</strong>
+                              <span className={`badge ${status.cls}`}>{status.text}</span>
+                            </div>
+                            <p className="muted" style={{ margin: "0 0 6px", fontSize: 13 }}>
+                              {Math.round(minutesUsed)} of {limit} minutes used · {Math.round(remaining)} minutes remaining · {percent}%
+                            </p>
+                            <div
+                              role="progressbar"
+                              aria-valuenow={percent}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-label={`${label} usage`}
+                              style={{ background: "var(--border)", borderRadius: 999, height: 8, overflow: "hidden" }}
                             >
-                              ×
-                            </button>
-                          </span>
-                        ))}
-                    </div>
-                  )}
-                  <input
-                    id="website-search"
-                    type="text"
-                    placeholder="Search TikTok, YouTube Shorts, Instagram Reels..."
-                    value={websiteSearch}
-                    onChange={(e) => setWebsiteSearch(e.target.value)}
-                  />
-                  <div
-                    role="listbox"
-                    aria-label="Website search results"
-                    style={{ maxHeight: 160, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8, marginTop: 6 }}
-                  >
-                    {websiteCatalog
-                      .filter((w) => !selectedWebsiteIds.includes(w.id))
-                      .filter((w) => w.label.toLowerCase().includes(websiteSearch.toLowerCase()) || w.domain.includes(websiteSearch.toLowerCase()))
-                      .slice(0, 8)
-                      .map((w) => (
-                        <button
-                          key={w.id}
-                          type="button"
-                          role="option"
-                          aria-selected={false}
-                          onClick={() => setSelectedWebsiteIds((prev) => [...prev, w.id])}
-                          style={{
-                            display: "block",
-                            width: "100%",
-                            textAlign: "left",
-                            padding: "6px 10px",
-                            background: "none",
-                            border: "none",
-                            borderBottom: "1px solid var(--border)",
-                            cursor: "pointer",
-                          }}
-                        >
-                          {w.label} <span className="muted" style={{ fontSize: 12 }}>{w.domain}{w.url_pattern || ""}</span>
-                        </button>
-                      ))}
-                    {websiteCatalog.length === 0 && (
-                      <p className="muted" style={{ fontSize: 13, padding: "6px 10px" }}>Loading website catalog...</p>
+                              <div
+                                style={{
+                                  width: `${percent}%`,
+                                  height: "100%",
+                                  borderRadius: 999,
+                                  background:
+                                    status.cls === "restricted"
+                                      ? "#991b1b"
+                                      : status.cls === "warning_two"
+                                      ? "#c2410c"
+                                      : status.cls === "warning_one"
+                                      ? "#b45309"
+                                      : "#2563eb",
+                                  transition: "width 0.3s ease",
+                                }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })
                     )}
                   </div>
 
-                  <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                    <input
-                      type="text"
-                      placeholder="Custom domain, e.g. khanacademy.org"
-                      value={customDomain}
-                      onChange={(e) => setCustomDomain(e.target.value)}
-                      style={{ flex: "1 1 160px", marginBottom: 0 }}
-                      aria-label="Custom domain"
-                    />
-                    <input
-                      type="text"
-                      placeholder="Label (optional)"
-                      value={customLabel}
-                      onChange={(e) => setCustomLabel(e.target.value)}
-                      style={{ flex: "1 1 120px", marginBottom: 0 }}
-                      aria-label="Custom website label"
-                    />
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={addingCustomWebsite || !customDomain.trim()}
-                      onClick={handleAddCustomWebsite}
-                    >
-                      {addingCustomWebsite ? "Adding..." : "Add domain"}
+                  <div className="card">
+                    <h2>Screen-time rules</h2>
+                    {rules.length === 0 && <p className="muted">No rules set yet for this student.</p>}
+                    {rules.map((rule) => {
+                      const sitesLine = ruleSitesLine(rule);
+                      return (
+                        <div key={rule.id} style={{ padding: "12px 0", borderBottom: "1px solid var(--border)" }}>
+                          <strong>
+                            {rule.name}
+                            {!rule.active && <span className="muted"> (paused)</span>}
+                          </strong>
+                          {sitesLine && (
+                            <p className="muted" style={{ margin: "2px 0", fontSize: 13 }}>
+                              {sitesLine}
+                            </p>
+                          )}
+                          <p className="muted" style={{ margin: "2px 0 8px", fontSize: 13 }}>
+                            {rule.daily_limit_minutes} minutes {rule.websites.length > 1 ? "combined " : ""}per day
+                          </p>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            <button className="secondary" onClick={() => openEditRule(rule)}>
+                              Edit
+                            </button>
+                            <button className="secondary" onClick={() => handleTogglePause(rule)}>
+                              {rule.active ? "Pause" : "Resume"}
+                            </button>
+                            <button className="danger" onClick={() => handleDeleteRule(rule)}>
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <button className="secondary" style={{ marginTop: 12 }} onClick={openNewRule}>
+                      + New rule
                     </button>
                   </div>
                 </div>
-              )}
 
-              <label htmlFor="new-rule-limit">Daily limit (minutes)</label>
-              <input id="new-rule-limit" type="number" min={1} value={newLimit} onChange={(e) => setNewLimit(e.target.value)} />
-              {ruleError && <p style={{ color: "#991b1b", fontSize: 13 }}>{ruleError}</p>}
-              <button type="submit" disabled={creatingRule}>
-                {creatingRule ? "Adding..." : "Add rule"}
-              </button>
-              <button type="button" className="secondary" onClick={resetRuleForm}>
-                Cancel
-              </button>
-            </form>
-          ) : (
-            <button className="secondary" style={{ marginTop: 12 }} onClick={() => setShowNewRule(true)}>
-              + New rule
-            </button>
-          )}
-        </div>
+                <div className="dashboard-col">
+                  <div className="card">
+                    <h2>Active warnings & restrictions</h2>
+                    {usage && usage.active_restrictions.length > 0 ? (
+                      usage.active_restrictions.map((r, i) => {
+                        const rule = rules.find((ru) => ru.id === r.rule_id);
+                        const label = rule ? ruleDisplayLabel(rule) : "Limit";
+                        const seconds = usage?.total_seconds_by_rule[r.rule_id] || 0;
+                        const minutesUsed = Math.round(seconds / 60);
+                        const limit = rule?.daily_limit_minutes || 0;
+                        const studentName = focusedStudent?.display_name || "Your student";
+                        return (
+                          <div key={i} style={{ padding: "10px 0", borderBottom: "1px solid var(--border)" }}>
+                            <strong>{label} reached</strong>
+                            <p className="muted" style={{ margin: "4px 0", fontSize: 13 }}>
+                              {studentName} used {minutesUsed} of {limit} minutes. {r.reason}
+                            </p>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              <button className="secondary" onClick={() => setAllowMoreTimeFor(allowMoreTimeFor === r.rule_id ? null : r.rule_id)}>
+                                Allow more time
+                              </button>
+                              <button className="secondary" onClick={scrollToUsage}>
+                                View activity
+                              </button>
+                            </div>
+                            {allowMoreTimeFor === r.rule_id && (
+                              <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                                {EXTENSION_PRESETS.map((m) => (
+                                  <button key={m} className="secondary" onClick={() => handleAllowMoreTime(r.rule_id, m)}>
+                                    +{m} min
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    ) : usage && usage.active_warnings.length > 0 ? (
+                      usage.active_warnings.map((w, i) => {
+                        const rule = rules.find((ru) => ru.id === w.rule_id);
+                        return (
+                          <div className="row" key={i}>
+                            <span className={`badge warning_${w.level === 1 ? "one" : "two"}`}>warning {w.level}</span>
+                            <span className="muted">{rule ? ruleDisplayLabel(rule) : ""}</span>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <p className="muted">Nothing to review right now — usage is within today's limits.</p>
+                    )}
+                  </div>
 
-        <div className="card">
-          <h2>Pending extension requests</h2>
-          {pendingRequests.length === 0 && <p className="muted">No pending requests.</p>}
-          {pendingRequests.map((r) => (
-            <div className="row" key={r.id}>
-              <span>
-                {r.requested_minutes} min requested — {r.reason_code.replace(/_/g, " ")}
-              </span>
-              <span>
-                <button onClick={() => handleApprove(r.id, r.requested_minutes)}>Approve</button>
-                <button className="secondary" onClick={() => handleDeny(r.id)}>
-                  Deny
-                </button>
-              </span>
-            </div>
-          ))}
-        </div>
+                  <div className="card">
+                    <h2>Pending extension requests</h2>
+                    {pendingRequests.length === 0 && <p className="muted">No pending requests.</p>}
+                    {pendingRequests.map((r) => {
+                      const rule = rules.find((ru) => ru.id === r.rule_id);
+                      const websiteLabel = rule?.websites?.[0]?.label;
+                      const studentName = focusedStudent?.display_name || "Your student";
+                      const custom = customAmounts[r.id] || "";
+                      return (
+                        <div key={r.id} style={{ padding: "10px 0", borderBottom: "1px solid var(--border)" }}>
+                          <strong>
+                            {studentName} requested {r.requested_minutes ?? ""} additional minutes
+                          </strong>
+                          {rule && (
+                            <p className="muted" style={{ margin: "2px 0", fontSize: 13 }}>
+                              Rule: {ruleDisplayLabel(rule)}
+                            </p>
+                          )}
+                          {websiteLabel && (
+                            <p className="muted" style={{ margin: "2px 0", fontSize: 13 }}>
+                              Website: {websiteLabel}
+                            </p>
+                          )}
+                          {r.explanation && (
+                            <p className="muted" style={{ margin: "2px 0", fontSize: 13 }}>
+                              Reason: "{r.explanation}"
+                            </p>
+                          )}
+                          <p className="muted" style={{ margin: "2px 0 8px", fontSize: 12 }}>
+                            Requested {relativeTime(r.created_at)}
+                          </p>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                            {EXTENSION_PRESETS.map((m) => (
+                              <button key={m} className="secondary" onClick={() => handleApprove(r.id, m)}>
+                                Approve {m} min
+                              </button>
+                            ))}
+                            <input
+                              type="number"
+                              min={1}
+                              placeholder="Custom"
+                              value={custom}
+                              onChange={(e) => setCustomAmounts((prev) => ({ ...prev, [r.id]: e.target.value }))}
+                              style={{ width: 80, marginBottom: 0 }}
+                              aria-label="Custom approve amount"
+                            />
+                            <button
+                              className="secondary"
+                              disabled={!custom}
+                              onClick={() => {
+                                handleApprove(r.id, Number(custom));
+                                setCustomAmounts((prev) => ({ ...prev, [r.id]: "" }));
+                              }}
+                            >
+                              Approve custom
+                            </button>
+                            <button className="danger" onClick={() => handleDeny(r.id)}>
+                              Deny
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
 
-        <div className="card">
-          <h2>Device health</h2>
-          {health.length === 0 && <p className="muted">No devices registered yet.</p>}
-          {health.map((d) => (
-            <div className="row" key={d.device_id}>
-              <span>{d.device_name}</span>
-              <span className="muted">
-                {d.status === "not_reporting"
-                  ? "Hasn't reported recently — check its permissions"
-                  : d.status}
-              </span>
-            </div>
-          ))}
-        </div>
+                  <div className="card">
+                    <h2>Device health</h2>
+                    {health.map((d) => {
+                      const st = deviceStatusFor(d.status);
+                      return (
+                        <div key={d.device_id} style={{ padding: "10px 0", borderBottom: "1px solid var(--border)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                            <span>{d.device_name}</span>
+                            <span className={`badge ${st.cls}`}>{st.text}</span>
+                          </div>
+                          <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
+                            {d.last_seen_at ? `Last synchronized: ${relativeTime(d.last_seen_at)}` : "Never synchronized"}
+                            {d.platform_identifier ? ` · Browser: ${d.platform_identifier}` : ""}
+                          </p>
+                          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                            {st.needsAttention && (
+                              <button className="secondary" onClick={() => setTroubleshootDevice(d)}>
+                                Troubleshoot
+                              </button>
+                            )}
+                            <button className="secondary" onClick={() => setTroubleshootDevice(d)}>
+                              View permissions
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {health.length === 0 && (
+                      <div>
+                        <p className="muted">No devices registered yet.</p>
+                        {!registeringDevice ? (
+                          <button className="secondary" onClick={() => setRegisteringDevice(true)}>
+                            Connect a device
+                          </button>
+                        ) : (
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            <input
+                              placeholder="Device name, e.g. Alex's Chrome"
+                              value={newDeviceName}
+                              onChange={(e) => setNewDeviceName(e.target.value)}
+                              style={{ flex: "1 1 200px", marginBottom: 0 }}
+                            />
+                            <button onClick={handleRegisterDevice} disabled={!newDeviceName.trim()}>
+                              Register
+                            </button>
+                            <button className="secondary" onClick={() => setRegisteringDevice(false)}>
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
+
+      {ruleModal && (
+        <RuleFormModal
+          state={ruleModal}
+          setState={(updater) => setRuleModal((prev) => (prev ? updater(prev) : prev))}
+          students={students}
+          websiteCatalog={websiteCatalog}
+          onAddCustomWebsite={handleAddCustomWebsiteGlobal}
+          onSubmit={handleSubmitRuleModal}
+          onClose={() => setRuleModal(null)}
+          onDelete={ruleModal.mode === "edit" ? handleDeleteFromModal : undefined}
+          busy={ruleModalBusy}
+          error={ruleModalError}
+        />
+      )}
+
+      {simSteps && (
+        <div role="presentation" className="modal-backdrop" onClick={() => setSimSteps(null)}>
+          <div role="dialog" aria-modal="true" aria-labelledby="sim-modal-title" onClick={(e) => e.stopPropagation()} className="card modal-body">
+            <h2 id="sim-modal-title">Demo simulation</h2>
+            <p className="muted" style={{ fontSize: 13 }}>
+              This ran real usage through the actual rules engine and warning/restriction pipeline on the demo
+              student's gaming limit — it is not real browser-extension activity.
+            </p>
+            {simSteps.length === 0 ? (
+              <p className="muted">Already at the end of the sequence — reset the demo to run it again from the start.</p>
+            ) : (
+              simSteps.map((s, i) => (
+                <div className="row" key={i}>
+                  <span
+                    className={`badge ${
+                      s.level === "restricted" ? "restricted" : s.level === "warning_two" ? "warning_two" : s.level === "warning_one" ? "warning_one" : "none"
+                    }`}
+                  >
+                    {s.level.replace(/_/g, " ")}
+                  </span>
+                  <span className="muted" style={{ fontSize: 13 }}>
+                    {s.message}
+                  </span>
+                </div>
+              ))
+            )}
+            <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>
+              A new extension request should now be waiting for you to approve or deny.
+            </p>
+            <button className="secondary" onClick={() => setSimSteps(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {deviceTokenModal && (
+        <div role="presentation" className="modal-backdrop" onClick={() => setDeviceTokenModal(null)}>
+          <div role="dialog" aria-modal="true" aria-labelledby="token-modal-title" onClick={(e) => e.stopPropagation()} className="card modal-body">
+            <h2 id="token-modal-title">{deviceTokenModal.name} registered</h2>
+            <p className="muted" style={{ fontSize: 13 }}>
+              Paste this token into the FocusSentinel browser extension's setup screen on the student's device. It's
+              shown only once — if you lose it, register the device again.
+            </p>
+            <input readOnly value={deviceTokenModal.token} onFocus={(e) => e.currentTarget.select()} style={{ fontFamily: "monospace", fontSize: 13 }} />
+            <button className="secondary" onClick={() => setDeviceTokenModal(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {troubleshootDevice && (
+        <div role="presentation" className="modal-backdrop" onClick={() => setTroubleshootDevice(null)}>
+          <div role="dialog" aria-modal="true" aria-labelledby="troubleshoot-title" onClick={(e) => e.stopPropagation()} className="card modal-body">
+            <h2 id="troubleshoot-title">Troubleshoot {troubleshootDevice.device_name}</h2>
+            <p className="muted" style={{ fontSize: 13 }}>
+              {troubleshootDevice.status === "revoked"
+                ? "This device's access was revoked. Register it again from this student's device to resume tracking."
+                : "This device hasn't reported recently, or one of its permissions is off. Try these steps:"}
+            </p>
+            <ol style={{ paddingLeft: 20, fontSize: 14, color: "var(--ink)" }}>
+              <li>Make sure the FocusSentinel browser extension is installed and enabled.</li>
+              <li>Open the extension and confirm it shows as connected to this student's account.</li>
+              <li>Check that the device has an active internet connection.</li>
+              <li>Confirm any browser permission prompts from the extension were accepted.</li>
+              <li>If the issue continues, remove and re-register the device from a parent account.</li>
+            </ol>
+            {Object.keys(troubleshootDevice.permissions || {}).length > 0 && (
+              <>
+                <p style={{ fontSize: 13, fontWeight: 600, margin: "12px 0 4px" }}>Permissions on file</p>
+                <ul style={{ paddingLeft: 20, fontSize: 13, color: "var(--muted)", margin: 0 }}>
+                  {Object.entries(troubleshootDevice.permissions).map(([key, granted]) => (
+                    <li key={key}>
+                      {key.replace(/_/g, " ")}: {granted ? "granted" : "not granted"}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <button className="secondary" style={{ marginTop: 16 }} onClick={() => setTroubleshootDevice(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
 }

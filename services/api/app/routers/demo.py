@@ -24,6 +24,11 @@ router = APIRouter(prefix="/demo", tags=["demo"])
 
 DEMO_FAMILY_NAME = "Demo Family (Sample Data)"
 
+# The one email the public login page's "Try the Interactive Demo" button
+# signs into. Must always land on a fully populated dashboard — see
+# ensure_demo_account_family below.
+RESERVED_DEMO_EMAIL = "parent@focussentinel.demo"
+
 
 def is_demo_family_name(name: str) -> bool:
     return name == DEMO_FAMILY_NAME
@@ -100,6 +105,7 @@ def _create_demo_family(db: Session, user: models.User):
         student_id=student.id,
         device_type="browser_extension",
         name="Alex's Chrome Extension",
+        platform_identifier="Chrome",
         device_token_hash=token_hash,
         status="active",
         last_seen_at=datetime.utcnow() - timedelta(minutes=2),
@@ -194,6 +200,28 @@ def _create_demo_family(db: Session, user: models.User):
     db.commit()
 
     return family, student
+
+
+def ensure_demo_account_family(db: Session, user: models.User) -> None:
+    """The reserved public demo login must never look mostly empty to a
+    first-time visitor or reviewer. Earlier deployments seeded this exact
+    account (via database/seed/seed.py) with a thin single-rule "Demo
+    Family" that predates DEMO_FAMILY_NAME and the Simulate/Reset
+    controls — isDemoFamily() on the frontend only recognizes the newer
+    name, so that old seed family renders as a bare, mostly-empty
+    dashboard. Called on every login for this one address: cleans up any
+    non-matching family still attached to the account, then makes sure the
+    rich, fully-populated demo family exists. Idempotent — a no-op after
+    the first run for any given account."""
+    if user.email != RESERVED_DEMO_EMAIL:
+        return
+    memberships = db.query(models.FamilyMember).filter_by(user_id=user.id).all()
+    for m in memberships:
+        fam = db.get(models.Family, m.family_id)
+        if fam and fam.name != DEMO_FAMILY_NAME:
+            _delete_family_cascade(db, fam.id)
+    if not _find_demo_family(db, user.id):
+        _create_demo_family(db, user)
 
 
 @router.post("/load")

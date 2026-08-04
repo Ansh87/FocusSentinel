@@ -54,6 +54,67 @@ def create_extension_request(payload: schemas.ExtensionRequestCreate, db: Sessio
     return req
 
 
+@router.post("/grant", response_model=schemas.ExtensionRequestOut)
+def grant_extension(payload: schemas.ExtensionGrantRequest, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    """Lets a parent proactively hand over extra time from the "Allow more
+    time" action on a restriction card, without waiting on the student to
+    have filed a request first. Creates the ExtensionRequest already
+    approved, in one step, so it shows up in history the same way a
+    student-initiated approval would."""
+    student = db.get(models.Student, payload.student_id)
+    if not student:
+        raise HTTPException(404, "Student not found")
+
+    restriction = (
+        db.query(models.RestrictionEvent)
+        .filter_by(student_id=payload.student_id, rule_id=payload.rule_id, active=True)
+        .order_by(models.RestrictionEvent.started_at.desc())
+        .first()
+    )
+    req = models.ExtensionRequest(
+        student_id=payload.student_id,
+        restriction_event_id=restriction.id if restriction else None,
+        rule_id=payload.rule_id,
+        requested_minutes=payload.minutes,
+        reason_code="other",
+        explanation="Granted directly by parent.",
+        status="approved",
+        decided_by=user.id,
+        decided_minutes=payload.minutes,
+        decided_at=datetime.utcnow(),
+    )
+    db.add(req)
+    db.flush()
+
+    if restriction and restriction.active:
+        restriction.active = False
+        restriction.lifted_at = datetime.utcnow()
+        restriction.lifted_reason = "extension_approved"
+
+    db.add(
+        models.AuditLog(
+            family_id=student.family_id,
+            actor_user_id=user.id,
+            actor_type="parent",
+            action="extension_request.granted",
+            target_type="extension_request",
+            target_id=req.id,
+            event_metadata={"minutes": payload.minutes},
+        )
+    )
+    enqueue_notification(
+        db,
+        family_id=student.family_id,
+        student_id=student.id,
+        event_type="extension_approved",
+        rule_id=payload.rule_id,
+        payload={"minutes": payload.minutes},
+    )
+    db.commit()
+    db.refresh(req)
+    return req
+
+
 @router.post("/{request_id}/approve", response_model=schemas.ExtensionRequestOut)
 def approve_extension_request(request_id: str, decision: schemas.ExtensionDecision, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
     req = db.get(models.ExtensionRequest, request_id)

@@ -74,13 +74,15 @@ class RulesEngine:
         if state.warning_two_at is not None:
             seconds_since_w2 = (adjusted_minutes - state.warning_two_at) * 60
             if seconds_since_w2 >= rule.block_after_warning_two_seconds:
+                activity = rule.name[:-6].strip() if rule.name.lower().endswith(" limit") else rule.name
+                reset_str = rule.reset_time.strftime("%I:%M %p").lstrip("0") or "12:00 AM"
                 return EvaluationResult(
                     level=WarningLevel.RESTRICTED,
                     minutes_used=minutes_used_today,
                     limit_minutes=limit,
                     minutes_remaining=0,
-                    message=f"{rule.name} is restricted for today. "
-                            f"It will be available again at {rule.reset_time}.",
+                    message=f"{activity} access is restricted for today. "
+                            f"Access resumes at {reset_str}.",
                     should_notify=True,
                 )
             seconds_left = max(rule.block_after_warning_two_seconds - seconds_since_w2, 0)

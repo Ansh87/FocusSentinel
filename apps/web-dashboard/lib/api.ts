@@ -48,6 +48,7 @@ export const api = {
   listRules: (studentId: string) => request(`/rules/student/${studentId}`),
   updateRule: (id: string, payload: Record<string, unknown>) =>
     request(`/rules/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteRule: (id: string) => request(`/rules/${id}`, { method: "DELETE" }),
   registerDevice: (payload: Record<string, unknown>) =>
     request("/devices/register", { method: "POST", body: JSON.stringify(payload) }),
   createRecipient: (payload: Record<string, unknown>) =>
@@ -55,6 +56,8 @@ export const api = {
   approveExtension: (id: string, minutes?: number, rest_of_day?: boolean) =>
     request(`/extension-requests/${id}/approve`, { method: "POST", body: JSON.stringify({ minutes, rest_of_day }) }),
   denyExtension: (id: string) => request(`/extension-requests/${id}/deny`, { method: "POST" }),
+  grantExtension: (student_id: string, rule_id: string, minutes: number) =>
+    request("/extension-requests/grant", { method: "POST", body: JSON.stringify({ student_id, rule_id, minutes }) }),
   requestExtension: (payload: Record<string, unknown>) =>
     request("/extension-requests", { method: "POST", body: JSON.stringify(payload) }),
   listExtensionRequests: (studentId: string, status?: string) =>

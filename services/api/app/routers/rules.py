@@ -125,6 +125,28 @@ def update_rule(rule_id: str, payload: schemas.RuleUpdate, db: Session = Depends
 
     fields = payload.model_dump(exclude_unset=True)
     website_ids = fields.pop("website_ids", None)
+    scope_category_key = fields.pop("scope_category_key", None)
+    student_id = fields.pop("student_id", None)
+
+    if student_id is not None:
+        student = db.get(models.Student, student_id)
+        if not student:
+            raise HTTPException(404, "Student not found")
+        rule.student_id = student.id
+        rule.family_id = student.family_id
+
+    if scope_category_key is not None:
+        category = db.query(models.ActivityCategory).filter_by(key=scope_category_key).first()
+        if not category:
+            raise HTTPException(400, f"Unknown category key: {scope_category_key}")
+        rule.scope_category_id = category.id
+        rule.scope_type = "category"
+        # Switching a rule to a whole-category scope clears any website
+        # selection it previously had, so the two scopes never coexist in
+        # a way that would make find_active_rule's priority ambiguous.
+        rule.scope_website_id = None
+        db.query(models.RuleWebsite).filter_by(rule_id=rule.id).delete()
+
     if website_ids is not None:
         # website_ids isn't a plain column on ScreenTimeRule — it's a
         # separate join table — so it's handled here instead of via the
@@ -142,6 +164,9 @@ def update_rule(rule_id: str, payload: schemas.RuleUpdate, db: Session = Depends
         db.query(models.RuleWebsite).filter_by(rule_id=rule.id).delete()
         for website in websites:
             db.add(models.RuleWebsite(rule_id=rule.id, website_id=website.id))
+        if website_ids:
+            rule.scope_type = "website"
+            rule.scope_category_id = None
 
     for field, value in fields.items():
         setattr(rule, field, value)
@@ -159,6 +184,35 @@ def update_rule(rule_id: str, payload: schemas.RuleUpdate, db: Session = Depends
     db.commit()
     db.refresh(rule)
     return _to_rule_out(db, rule)
+
+
+@router.delete("/{rule_id}", status_code=204)
+def delete_rule(rule_id: str, db: Session = Depends(get_db), user: models.User = Depends(require_parent)):
+    rule = db.get(models.ScreenTimeRule, rule_id)
+    if not rule:
+        raise HTTPException(404, "Rule not found")
+
+    db.query(models.RuleWebsite).filter_by(rule_id=rule.id).delete()
+    db.query(models.WarningEvent).filter_by(rule_id=rule.id).delete()
+    db.query(models.RestrictionEvent).filter_by(rule_id=rule.id).delete()
+    # Extension requests keep their history rather than being deleted — just
+    # detach them from the rule that no longer exists.
+    db.query(models.ExtensionRequest).filter_by(rule_id=rule.id).update({"rule_id": None})
+
+    db.add(
+        models.AuditLog(
+            family_id=rule.family_id,
+            actor_user_id=user.id,
+            actor_type="parent",
+            action="rule.deleted",
+            target_type="screen_time_rule",
+            target_id=rule.id,
+            event_metadata={"name": rule.name},
+        )
+    )
+    db.delete(rule)
+    db.commit()
+    return None
 
 
 @router.get("/student/{student_id}", response_model=list[schemas.RuleOut])
