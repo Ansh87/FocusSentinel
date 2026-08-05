@@ -1278,10 +1278,21 @@ export default function DashboardPage() {
                             Manages siblings{s.sibling_manager_until ? ` until ${new Date(s.sibling_manager_until).toLocaleString()}` : ""}
                           </span>
                         )}
-                        {s.has_phone && (
+                        {s.has_phone ? (
                           <span className="badge none" style={{ marginLeft: 8, fontSize: 11 }}>
                             Can text for time
                           </span>
+                        ) : (
+                          !s.is_archived && (
+                            <button
+                              type="button"
+                              className="link-button"
+                              style={{ marginLeft: 8, fontSize: 11 }}
+                              onClick={() => startEditStudent(s)}
+                            >
+                              + Add phone to text for time
+                            </button>
+                          )
                         )}
                       </span>
                       <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>

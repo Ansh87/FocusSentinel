@@ -79,6 +79,26 @@ def delete_account(db: Session = Depends(get_db), user: models.User = Depends(ge
 
     memberships = db.query(models.FamilyMember).filter_by(user_id=user.id, role="parent").all()
     family_ids = [m.family_id for m in memberships]
+
+    # Archived students are hidden from the dashboard, so a parent who
+    # archived (rather than hard-deleted) their only kid reasonably sees an
+    # empty family and expects account deletion to work. Since deleting the
+    # account is itself final and irreversible, there's no reason to keep
+    # blocking on students that were already marked as "dealt with" --
+    # clean those up automatically here rather than making the parent
+    # separately hunt down and hard-delete something the UI already shows
+    # as gone. Genuinely active (non-archived) students still block below.
+    if family_ids:
+        archived_ids = [
+            row.student_id
+            for row in db.query(models.StudentArchiveState)
+            .join(models.Student, models.Student.id == models.StudentArchiveState.student_id)
+            .filter(models.Student.family_id.in_(family_ids))
+            .all()
+        ]
+        if archived_ids:
+            cascade.delete_students(db, archived_ids)
+
     remaining_students = (
         db.query(models.Student).filter(models.Student.family_id.in_(family_ids)).count() if family_ids else 0
     )

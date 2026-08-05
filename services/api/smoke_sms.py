@@ -22,9 +22,29 @@ def _enable_fk(dbapi_connection, connection_record):
 
 from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
+from app.database import SessionLocal  # noqa: E402
+from app import models  # noqa: E402
 
 Base.metadata.create_all(bind=engine)
 client = TestClient(app)
+
+
+def latest_sms_to(phone_number):
+    # Plain Python-side filtering rather than a JSON operator in the query --
+    # SQLite's JSON support differs enough from Postgres's that a DB-side
+    # JSON filter here would test SQLite's JSON1 extension, not this app's
+    # actual logic.
+    with SessionLocal() as db:
+        rows = (
+            db.query(models.NotificationEvent)
+            .filter_by(channel="sms")
+            .order_by(models.NotificationEvent.created_at.desc())
+            .all()
+        )
+        for row in rows:
+            if row.payload.get("to_phone") == phone_number:
+                return row
+        return None
 
 
 def register_and_login(email, password, display_name, role="parent"):
@@ -103,6 +123,11 @@ r = client.get(f"/extension-requests?student_id={student_id}&status=denied", hea
 assert len(r.json()) == 1, r.json()
 print("Request status is denied: OK")
 
+student_sms = latest_sms_to("+15551234567")
+assert student_sms is not None, "student should have been texted about the denial"
+assert student_sms.event_type == "extension_denied_student", student_sms.event_type
+print("Student was texted back about the denial (parent decided via SMS): OK")
+
 # --- Student texts again, parent approves this time ---
 r = sms("+15551234567", "10")
 assert r.status_code == 200, r.text
@@ -114,6 +139,24 @@ print("Parent SMS approve resolved the request with correct minutes: OK")
 r = client.get(f"/extension-requests?student_id={student_id}&status=approved", headers=headers)
 assert len(r.json()) == 1, r.json()
 print("Request status is approved: OK")
+
+student_sms = latest_sms_to("+15551234567")
+assert student_sms.event_type == "extension_approved_student", student_sms.event_type
+assert student_sms.payload.get("minutes") == 10, student_sms.payload
+print("Student was texted back about the approval with correct minutes (parent decided via SMS): OK")
+
+# --- Now confirm the SAME notify-the-student behavior fires when the parent
+# decides via the ordinary dashboard button instead of a text reply ---
+r = sms("+15551234567", "MORE 5")
+assert r.status_code == 200, r.text
+r = client.get(f"/extension-requests?student_id={student_id}&status=pending", headers=headers)
+dashboard_pending = r.json()[0]
+r = client.post(f"/extension-requests/{dashboard_pending['id']}/approve", json={"minutes": 5}, headers=headers)
+assert r.status_code == 200, r.text
+student_sms = latest_sms_to("+15551234567")
+assert student_sms.event_type == "extension_approved_student", student_sms.event_type
+assert student_sms.payload.get("minutes") == 5, student_sms.payload
+print("Student was texted back even when the parent decided via the dashboard button: OK")
 
 # --- Replying again with nothing pending is handled gracefully ---
 r = sms("+15559876543", "YES")

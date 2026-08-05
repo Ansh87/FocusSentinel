@@ -30,6 +30,14 @@ TEMPLATES = {
         "Extension request denied",
         "An extension request was denied.",
     ),
+    "extension_approved_student": (
+        "You got more time",
+        "Good news, {student_name} — your parent approved {minutes} more minutes.",
+    ),
+    "extension_denied_student": (
+        "About your request for more time",
+        "{student_name}, your parent said no to more time for now. You can ask again later if things change.",
+    ),
     "permission_disabled": (
         "A device permission needs attention",
         "FocusSentinel is missing a permission it needs on one of the family's devices. "

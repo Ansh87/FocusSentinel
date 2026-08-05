@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 from ..database import get_db
 from ..deps import ensure_can_manage_student, ensure_own_student_or_parent, get_current_user
-from ..notifications import create_sms_decision_links, enqueue_notification
+from ..notifications import create_sms_decision_links, enqueue_direct_sms, enqueue_notification
 
 router = APIRouter(prefix="/extension-requests", tags=["extension-requests"])
 
@@ -56,6 +56,26 @@ def approve_request_internal(
             rule_id=req.rule_id,
             payload={"minutes": minutes},
         )
+        _notify_student_of_decision(db, student, event_type="extension_approved_student", payload={"minutes": minutes})
+
+
+def _notify_student_of_decision(db: Session, student: models.Student, *, event_type: str, payload: dict) -> None:
+    """Texts the requesting student's own phone (if they have one on file)
+    once their extension request is decided -- regardless of whether the
+    parent decided via the dashboard buttons or by replying YES/NO to a
+    text. Without this, a request texted in gets a reply to the *parent's*
+    phone but the kid who's actually waiting never hears back unless they
+    happen to check the dashboard."""
+    phone = db.query(models.StudentPhone).filter_by(student_id=student.id).first()
+    if not phone:
+        return
+    enqueue_direct_sms(
+        db,
+        family_id=student.family_id,
+        to_phone=phone.phone_number,
+        event_type=event_type,
+        payload={**payload, "student_name": student.display_name},
+    )
 
 
 def deny_request_internal(db: Session, req: models.ExtensionRequest, *, user_id: str | None, actor_type: str) -> None:
@@ -83,6 +103,7 @@ def deny_request_internal(db: Session, req: models.ExtensionRequest, *, user_id:
             rule_id=req.rule_id,
             payload={},
         )
+        _notify_student_of_decision(db, student, event_type="extension_denied_student", payload={})
 
 
 @router.get("", response_model=list[schemas.ExtensionRequestOut])

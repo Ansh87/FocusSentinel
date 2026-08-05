@@ -92,4 +92,28 @@ assert r.status_code == 200, r.text
 r = client.delete(f"/students/{student_a}", headers=headers_a)
 assert r.status_code == 200, r.text
 
+# --- Account deletion isn't blocked by a student the parent only archived
+# (rather than hard-deleted) -- archived students are invisible on the
+# dashboard, so blocking deletion on them would look like account deletion
+# is silently broken. A genuinely active student still blocks it. ---
+headers_c = register_and_login("parentC@example.com", "password123", "Parent C")
+r = client.post("/families", json={"name": "Family C", "timezone": "UTC"}, headers=headers_c)
+family_c = r.json()["id"]
+r = client.post("/students", json={"family_id": family_c, "display_name": "Only Kid", "age_range": "8_12", "timezone": "UTC"}, headers=headers_c)
+only_kid_id = r.json()["id"]
+
+r = client.delete("/auth/account", headers=headers_c)
+assert r.status_code == 409, r.text
+print("Account deletion still blocked while a student is active (not archived): OK")
+
+r = client.post(f"/students/{only_kid_id}/archive", headers=headers_c)
+assert r.status_code == 200, r.text
+r = client.delete("/auth/account", headers=headers_c)
+assert r.status_code == 200, f"account deletion should succeed once the only student is archived: {r.text}"
+print("Account deletion succeeds once the only student is archived (auto-cleaned-up): OK")
+
+r = client.post("/auth/login", json={"email": "parentC@example.com", "password": "password123"})
+assert r.status_code == 401, r.text
+print("Deleted account (via archived-student path) can no longer sign in: OK")
+
 print("ALL SMOKE_STUDENTS_MGMT CHECKS PASSED")
