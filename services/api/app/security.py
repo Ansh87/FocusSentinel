@@ -45,6 +45,21 @@ def create_password_reset_token(subject: str) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
+def create_extension_action_token(extension_request_id: str) -> str:
+    """Short-lived, single-purpose token embedded in a parent's approve/deny
+    extension-request email links (see app/routers/extension_requests.py's
+    GET /decide endpoint), so a parent can resolve a request straight from
+    their phone's email app without signing in. There's no separate
+    one-time-use table for this -- the endpoint just refuses to act unless
+    the referenced ExtensionRequest is still "pending", which a normal
+    decision (via this link, the dashboard, or a second click of the same
+    link) already flips, so replay is naturally blocked by state that has to
+    exist anyway."""
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.extension_action_token_expire_minutes)
+    payload = {"sub": extension_request_id, "exp": expire, "type": "extension_action", "jti": secrets.token_hex(16)}
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
 def decode_token(token: str) -> dict | None:
     try:
         return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])

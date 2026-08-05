@@ -53,11 +53,7 @@ def process_once(engine) -> int:
             payload.setdefault("student_name", payload.get("student_name", "Your student"))
             subject, body = render(row["event_type"], payload)
             target_email = row["email"] or payload.get("to_email")
-            # A direct-to-student text (see enqueue_direct_sms) has no
-            # notification_recipients row at all -- recipient_id is NULL, so
-            # the LEFT JOIN's mobile_number comes back empty -- the actual
-            # destination number travels in the payload instead.
-            target_phone = row["mobile_number"] or payload.get("to_phone")
+            target_phone = row["mobile_number"]
 
             try:
                 if row["channel"] == "email":

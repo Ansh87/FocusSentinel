@@ -14,7 +14,6 @@ type Student = {
   is_sibling_manager?: boolean;
   sibling_manager_until?: string | null;
   is_archived?: boolean;
-  has_phone?: boolean;
 };
 type TodayUsage = {
   total_seconds_by_category: Record<string, number>;
@@ -503,35 +502,9 @@ export default function DashboardPage() {
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editAge, setEditAge] = useState(AGE_RANGES[2].key);
-  const [editPhone, setEditPhone] = useState("");
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [archiveBusyId, setArchiveBusyId] = useState<string | null>(null);
-
-  const [smsStatus, setSmsStatus] = useState<{ enabled: boolean; phone_number: string | null } | null>(null);
-
-  type Recipient = {
-    id: string;
-    family_id: string;
-    name: string;
-    relationship: string;
-    email: string | null;
-    mobile_number: string | null;
-    preferred_channels: string[];
-    severity_preference: string;
-    verified: boolean;
-  };
-  const [recipients, setRecipients] = useState<Recipient[]>([]);
-  const [showAddRecipient, setShowAddRecipient] = useState(false);
-  const [recipientName, setRecipientName] = useState("");
-  const [recipientRelationship, setRecipientRelationship] = useState("parent");
-  const [recipientEmail, setRecipientEmail] = useState("");
-  const [recipientMobile, setRecipientMobile] = useState("");
-  const [recipientChannels, setRecipientChannels] = useState<string[]>(["email"]);
-  const [recipientSeverity, setRecipientSeverity] = useState("all");
-  const [recipientBusy, setRecipientBusy] = useState(false);
-  const [recipientError, setRecipientError] = useState<string | null>(null);
-  const [editingRecipientId, setEditingRecipientId] = useState<string | null>(null);
 
   const [deleteStudentTarget, setDeleteStudentTarget] = useState<Student | null>(null);
   const [deleteStudentBusy, setDeleteStudentBusy] = useState(false);
@@ -601,12 +574,6 @@ export default function DashboardPage() {
       .catch(() => {
         /* non-fatal -- greeting just won't show a name */
       });
-    api
-      .getSmsStatus()
-      .then(setSmsStatus)
-      .catch(() => {
-        /* non-fatal -- text-to-request explainer just won't show */
-      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -643,20 +610,11 @@ export default function DashboardPage() {
     }
   }
 
-  async function startEditStudent(s: Student) {
+  function startEditStudent(s: Student) {
     setEditingStudentId(s.id);
     setEditName(s.display_name);
     setEditAge(s.age_range || AGE_RANGES[2].key);
-    setEditPhone("");
     setEditError(null);
-    if (s.has_phone) {
-      try {
-        const status = await api.getStudentPhone(s.id);
-        setEditPhone(status.phone_number || "");
-      } catch {
-        /* non-fatal -- phone field just starts blank */
-      }
-    }
   }
 
   async function handleSaveEditStudent() {
@@ -665,11 +623,6 @@ export default function DashboardPage() {
     setEditError(null);
     try {
       await api.updateStudent(editingStudentId, { display_name: editName.trim(), age_range: editAge });
-      if (editPhone.trim()) {
-        await api.setStudentPhone(editingStudentId, editPhone.trim());
-      } else {
-        await api.clearStudentPhone(editingStudentId);
-      }
       setEditingStudentId(null);
       await loadFamilies();
     } catch (e: any) {
@@ -738,94 +691,6 @@ export default function DashboardPage() {
       });
   }, [families]);
 
-  async function loadRecipients() {
-    if (!families[0]?.id) return;
-    try {
-      setRecipients(await api.listRecipients(families[0].id));
-    } catch {
-      /* non-fatal -- the recipients card just won't populate yet */
-    }
-  }
-
-  useEffect(() => {
-    loadRecipients();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [families]);
-
-  function resetRecipientForm() {
-    setRecipientName("");
-    setRecipientRelationship("parent");
-    setRecipientEmail("");
-    setRecipientMobile("");
-    setRecipientChannels(["email"]);
-    setRecipientSeverity("all");
-    setRecipientError(null);
-  }
-
-  function startAddRecipient() {
-    resetRecipientForm();
-    setEditingRecipientId(null);
-    setShowAddRecipient(true);
-  }
-
-  function startEditRecipient(r: Recipient) {
-    setRecipientName(r.name);
-    setRecipientRelationship(r.relationship);
-    setRecipientEmail(r.email || "");
-    setRecipientMobile(r.mobile_number || "");
-    setRecipientChannels(r.preferred_channels && r.preferred_channels.length ? r.preferred_channels : ["email"]);
-    setRecipientSeverity(r.severity_preference || "all");
-    setRecipientError(null);
-    setEditingRecipientId(r.id);
-    setShowAddRecipient(true);
-  }
-
-  function toggleRecipientChannel(channel: string) {
-    setRecipientChannels((prev) => (prev.includes(channel) ? prev.filter((c) => c !== channel) : [...prev, channel]));
-  }
-
-  async function handleSubmitRecipient(e: React.FormEvent) {
-    e.preventDefault();
-    if (!recipientName.trim() || !families[0]?.id) return;
-    if (recipientChannels.includes("sms") && !recipientMobile.trim()) {
-      setRecipientError("Add a mobile number to enable text alerts, or uncheck SMS.");
-      return;
-    }
-    setRecipientBusy(true);
-    setRecipientError(null);
-    try {
-      const payload = {
-        name: recipientName.trim(),
-        relationship: recipientRelationship,
-        email: recipientEmail.trim() || null,
-        mobile_number: recipientMobile.trim() || null,
-        preferred_channels: recipientChannels,
-        severity_preference: recipientSeverity,
-      };
-      if (editingRecipientId) {
-        await api.updateRecipient(editingRecipientId, payload);
-      } else {
-        await api.createRecipient({ family_id: families[0].id, ...payload });
-      }
-      setShowAddRecipient(false);
-      setEditingRecipientId(null);
-      await loadRecipients();
-    } catch (e: any) {
-      setRecipientError(e.message || "Could not save this contact.");
-    } finally {
-      setRecipientBusy(false);
-    }
-  }
-
-  async function handleDeleteRecipient(id: string) {
-    if (!window.confirm("Remove this contact from alerts?")) return;
-    try {
-      await api.deleteRecipient(id);
-      await loadRecipients();
-    } catch (e: any) {
-      setActionError(e.message || "Could not remove this contact.");
-    }
-  }
 
   async function handleResetDemo() {
     setDemoBusy(true);
@@ -1304,19 +1169,6 @@ export default function DashboardPage() {
                 Archiving hides a student from the dashboard and rule creation without deleting their history — reverse
                 it anytime with Unarchive. Delete removes them and their history permanently.
               </p>
-              {smsStatus?.enabled ? (
-                <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                  Add a student's phone number below (click Edit) to let them text{" "}
-                  <strong>{smsStatus.phone_number}</strong> to request more time. To actually receive that and reply
-                  YES/NO by text yourself, add your own number in "Text &amp; email alerts" below.
-                </p>
-              ) : (
-                <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                  Texting to request time isn't turned on for this deployment yet (needs a Twilio number configured
-                  server-side). You can still save a student's phone number now — it'll start working once that's
-                  set up.
-                </p>
-              )}
               {showAddStudent && (
                 <form onSubmit={handleAddStudent} style={{ margin: "12px 0", padding: 12, background: "var(--accent-soft)", borderRadius: 10 }}>
                   <label htmlFor="add-student-name">Student's name</label>
@@ -1351,21 +1203,6 @@ export default function DashboardPage() {
                           </option>
                         ))}
                       </select>
-                      <label htmlFor={`edit-phone-${s.id}`}>
-                        Phone number {smsStatus?.enabled ? "(to text for more time)" : ""}
-                      </label>
-                      <input
-                        id={`edit-phone-${s.id}`}
-                        type="tel"
-                        placeholder="(555) 123-4567"
-                        value={editPhone}
-                        onChange={(e) => setEditPhone(e.target.value)}
-                      />
-                      <p className="muted" style={{ fontSize: 12, marginTop: -8 }}>
-                        {smsStatus?.enabled
-                          ? `Once set, ${s.display_name} can text ${smsStatus.phone_number} to ask for more time. Leave blank to remove.`
-                          : "Saved even before texting is turned on for this deployment -- leave blank to remove."}
-                      </p>
                       {editError && <p style={{ color: "#991b1b", fontSize: 13 }}>{editError}</p>}
                       <div style={{ display: "flex", gap: 8 }}>
                         <button onClick={handleSaveEditStudent} disabled={editBusy || !editName.trim()}>
@@ -1389,22 +1226,6 @@ export default function DashboardPage() {
                           <span className="badge none" style={{ marginLeft: 8, fontSize: 11 }}>
                             Manages siblings{s.sibling_manager_until ? ` until ${new Date(s.sibling_manager_until).toLocaleString()}` : ""}
                           </span>
-                        )}
-                        {s.has_phone ? (
-                          <span className="badge none" style={{ marginLeft: 8, fontSize: 11 }}>
-                            Can text for time
-                          </span>
-                        ) : (
-                          !s.is_archived && (
-                            <button
-                              type="button"
-                              className="link-button"
-                              style={{ marginLeft: 8, fontSize: 11 }}
-                              onClick={() => startEditStudent(s)}
-                            >
-                              + Add phone to text for time
-                            </button>
-                          )
                         )}
                       </span>
                       <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -1478,106 +1299,6 @@ export default function DashboardPage() {
                   letting an eldest sibling cover for you temporarily. It never gives them account or billing access.
                 </p>
               )}
-            </div>
-
-            <div className="card">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
-                <h2 style={{ marginBottom: 0 }}>Text &amp; email alerts</h2>
-                {!showAddRecipient && (
-                  <button className="secondary" onClick={startAddRecipient} style={{ fontSize: 13, padding: "6px 12px" }}>
-                    + Add a contact
-                  </button>
-                )}
-              </div>
-              <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                Add yourself (or another parent/guardian) here to get warning, restriction, and extension-request
-                alerts. Include a mobile number and check SMS to also get texts — this is the contact list a
-                student's text-in request actually reaches, separate from the student's own phone number above.
-              </p>
-              {showAddRecipient && (
-                <form onSubmit={handleSubmitRecipient} style={{ margin: "12px 0", padding: 12, background: "var(--accent-soft)", borderRadius: 10 }}>
-                  <label htmlFor="recipient-name">Name</label>
-                  <input id="recipient-name" value={recipientName} onChange={(e) => setRecipientName(e.target.value)} required />
-                  <label htmlFor="recipient-relationship">Relationship</label>
-                  <input
-                    id="recipient-relationship"
-                    value={recipientRelationship}
-                    onChange={(e) => setRecipientRelationship(e.target.value)}
-                    placeholder="parent, grandparent, guardian..."
-                  />
-                  <label htmlFor="recipient-email">Email</label>
-                  <input id="recipient-email" type="email" value={recipientEmail} onChange={(e) => setRecipientEmail(e.target.value)} />
-                  <label htmlFor="recipient-mobile">Mobile number</label>
-                  <input
-                    id="recipient-mobile"
-                    type="tel"
-                    placeholder="(555) 123-4567"
-                    value={recipientMobile}
-                    onChange={(e) => setRecipientMobile(e.target.value)}
-                  />
-                  <label>Alert by</label>
-                  <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
-                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 400 }}>
-                      <input type="checkbox" checked={recipientChannels.includes("email")} onChange={() => toggleRecipientChannel("email")} />
-                      Email
-                    </label>
-                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 400 }}>
-                      <input type="checkbox" checked={recipientChannels.includes("sms")} onChange={() => toggleRecipientChannel("sms")} />
-                      Text (SMS)
-                    </label>
-                  </div>
-                  <label htmlFor="recipient-severity">Send me</label>
-                  <select id="recipient-severity" value={recipientSeverity} onChange={(e) => setRecipientSeverity(e.target.value)}>
-                    <option value="all">Everything (warnings, restrictions, requests)</option>
-                    <option value="restriction_only">Only restrictions &amp; extension requests</option>
-                    <option value="daily_summary_only">Only daily/weekly summaries</option>
-                  </select>
-                  {recipientError && <p style={{ color: "#991b1b", fontSize: 13 }}>{recipientError}</p>}
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button type="submit" disabled={recipientBusy || !recipientName.trim()}>
-                      {recipientBusy ? "Saving..." : editingRecipientId ? "Save changes" : "Add contact"}
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={recipientBusy}
-                      onClick={() => {
-                        setShowAddRecipient(false);
-                        setEditingRecipientId(null);
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-              )}
-              {recipients.length === 0 && !showAddRecipient && (
-                <p className="muted">
-                  No contacts yet — add one above so alerts (and any student text-in requests) reach a real phone or
-                  inbox.
-                </p>
-              )}
-              {recipients.map((r) => (
-                <div className="row" key={r.id}>
-                  <span>
-                    {r.name}
-                    <span className="muted" style={{ fontSize: 12 }}> · {r.relationship}</span>
-                  </span>
-                  <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <span className="muted" style={{ fontSize: 13 }}>
-                      {r.preferred_channels.includes("email") && r.email ? r.email : ""}
-                      {r.preferred_channels.includes("email") && r.email && r.preferred_channels.includes("sms") && r.mobile_number ? " · " : ""}
-                      {r.preferred_channels.includes("sms") && r.mobile_number ? r.mobile_number : ""}
-                    </span>
-                    <button className="secondary" onClick={() => startEditRecipient(r)} style={{ fontSize: 13, padding: "6px 10px" }}>
-                      Edit
-                    </button>
-                    <button className="danger" onClick={() => handleDeleteRecipient(r.id)} style={{ fontSize: 13, padding: "6px 10px" }}>
-                      Remove
-                    </button>
-                  </span>
-                </div>
-              ))}
             </div>
 
             {selectedView === "all" ? (
@@ -1740,12 +1461,6 @@ export default function DashboardPage() {
 
                   <div className="card">
                     <h2>Pending extension requests</h2>
-                    {smsStatus?.enabled && pendingRequests.length > 0 && (
-                      <p className="muted" style={{ fontSize: 12, marginTop: -6 }}>
-                        If this came in by text, you can also reply YES or NO to that text instead of using the
-                        buttons below.
-                      </p>
-                    )}
                     {pendingRequests.length === 0 && <p className="muted">No pending requests.</p>}
                     {pendingRequests.map((r) => {
                       const rule = rules.find((ru) => ru.id === r.rule_id);

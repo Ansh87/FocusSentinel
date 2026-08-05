@@ -20,7 +20,15 @@ TEMPLATES = {
     "extension_requested": (
         "{student_name} requested more time",
         "{student_name} requested {requested_minutes} more minutes ({reason_code}). "
-        "Reason given: {explanation}. Review and respond from the FocusSentinel dashboard.{sms_reply_hint}",
+        "Reason given: {explanation}. Review and respond from the FocusSentinel dashboard.",
+    ),
+    "extension_request_approval": (
+        "{student_name} requested more time",
+        "{student_name} requested {requested_minutes} more minutes ({reason_code}). "
+        "Reason given: {explanation}\n\n"
+        "Approve: {approve_url}\n"
+        "Deny: {deny_url}\n\n"
+        "Or open the FocusSentinel dashboard to decide from there.",
     ),
     "extension_approved": (
         "Extension approved",
@@ -29,14 +37,6 @@ TEMPLATES = {
     "extension_denied": (
         "Extension request denied",
         "An extension request was denied.",
-    ),
-    "extension_approved_student": (
-        "You got more time",
-        "Good news, {student_name} — your parent approved {minutes} more minutes.",
-    ),
-    "extension_denied_student": (
-        "About your request for more time",
-        "{student_name}, your parent said no to more time for now. You can ask again later if things change.",
     ),
     "permission_disabled": (
         "A device permission needs attention",
@@ -73,7 +73,11 @@ def render(event_type: str, payload: dict) -> tuple[str, str]:
     safe_payload.setdefault("message", "")
     safe_payload.setdefault("reset_url", "")
     safe_payload.setdefault("expires_minutes", "")
-    safe_payload.setdefault("sms_reply_hint", "")
+    safe_payload.setdefault("approve_url", "")
+    safe_payload.setdefault("deny_url", "")
+    safe_payload.setdefault("requested_minutes", "")
+    safe_payload.setdefault("reason_code", "")
+    safe_payload.setdefault("explanation", "")
     try:
         subject = subject_tpl.format(**safe_payload)
         body = body_tpl.format(**safe_payload)

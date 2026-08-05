@@ -63,17 +63,6 @@ def delete_students(db: Session, student_ids: list[str], *, delete_logins: bool 
         db.query(models.DeviceHealthEvent).filter(models.DeviceHealthEvent.device_id.in_(device_ids)).delete(synchronize_session=False)
         db.query(models.DevicePermission).filter(models.DevicePermission.device_id.in_(device_ids)).delete(synchronize_session=False)
 
-    # SmsPendingDecision.extension_request_id references ExtensionRequest, so
-    # it must be cleared before the requests themselves are deleted -- same
-    # FK-ordering lesson as the ExtensionRequest/RestrictionEvent fix below.
-    extension_request_ids = [
-        e.id for e in db.query(models.ExtensionRequest).filter(models.ExtensionRequest.student_id.in_(student_ids)).all()
-    ]
-    if extension_request_ids:
-        db.query(models.SmsPendingDecision).filter(
-            models.SmsPendingDecision.extension_request_id.in_(extension_request_ids)
-        ).delete(synchronize_session=False)
-
     # ExtensionRequest.restriction_event_id references RestrictionEvent, so
     # requests must go first -- deleting RestrictionEvent rows while a
     # request still points at one is exactly the FK violation (500, masked
@@ -88,7 +77,6 @@ def delete_students(db: Session, student_ids: list[str], *, delete_logins: bool 
     db.query(models.DailyUsageTotal).filter(models.DailyUsageTotal.student_id.in_(student_ids)).delete(synchronize_session=False)
     db.query(models.SiblingManagerGrant).filter(models.SiblingManagerGrant.manager_student_id.in_(student_ids)).delete(synchronize_session=False)
     db.query(models.StudentArchiveState).filter(models.StudentArchiveState.student_id.in_(student_ids)).delete(synchronize_session=False)
-    db.query(models.StudentPhone).filter(models.StudentPhone.student_id.in_(student_ids)).delete(synchronize_session=False)
 
     delete_rules(db, rule_ids)
 

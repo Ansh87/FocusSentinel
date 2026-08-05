@@ -30,15 +30,19 @@ class Settings(BaseSettings):
     email_provider: str = "console"
     sms_provider: str = "console"
 
-    # The API doesn't send SMS itself (that's notification-worker's job, via
-    # its own twilio_sms adapter) but it does need to know the number so the
-    # dashboard can tell a parent/student what to text, and needs a shared
-    # secret to authenticate Twilio's inbound webhook (Twilio doesn't send
-    # any credential of its own by default -- a query-string token is the
-    # simplest thing that works without pulling the `twilio` package into
-    # this service just to verify its request signature).
-    twilio_from_number: str = ""
-    sms_webhook_token: str = ""
+    # How long a parent's approve/deny email link (see
+    # app/routers/extension_requests.py's /decide endpoint) keeps working
+    # before it expires and they have to use the dashboard instead.
+    extension_action_token_expire_minutes: int = 1440  # 24 hours
+
+    # This service's own public URL, used to build the approve/deny links
+    # inside a parent's extension-request email -- those links hit the API
+    # directly (they resolve the decision server-side, no login required),
+    # not the web dashboard. Must be set to the API's own public domain in
+    # production (see docs/DEPLOYMENT.md); the localhost default only works
+    # for local dev, where clicking the link from a real phone wouldn't
+    # reach anything anyway.
+    public_api_base_url: str = "http://localhost:8000"
 
     cors_origins: list[str] = ["http://localhost:3000"]
 

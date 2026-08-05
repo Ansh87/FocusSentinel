@@ -67,11 +67,6 @@ export const api = {
     request(`/students/${studentId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   archiveStudent: (studentId: string) => request(`/students/${studentId}/archive`, { method: "POST" }),
   unarchiveStudent: (studentId: string) => request(`/students/${studentId}/unarchive`, { method: "POST" }),
-  getStudentPhone: (studentId: string) => request(`/students/${studentId}/phone`),
-  setStudentPhone: (studentId: string, phone_number: string) =>
-    request(`/students/${studentId}/phone`, { method: "POST", body: JSON.stringify({ phone_number }) }),
-  clearStudentPhone: (studentId: string) => request(`/students/${studentId}/phone`, { method: "DELETE" }),
-  getSmsStatus: () => request("/sms/status"),
   deleteStudent: (studentId: string) => request(`/students/${studentId}`, { method: "DELETE" }),
   clearUsageHistory: (studentId: string) => request(`/students/${studentId}/usage/history`, { method: "DELETE" }),
   grantSiblingManager: (studentId: string, hours?: number | null) =>
@@ -87,12 +82,6 @@ export const api = {
   deleteRule: (id: string) => request(`/rules/${id}`, { method: "DELETE" }),
   registerDevice: (payload: Record<string, unknown>) =>
     request("/devices/register", { method: "POST", body: JSON.stringify(payload) }),
-  createRecipient: (payload: Record<string, unknown>) =>
-    request("/notification-recipients", { method: "POST", body: JSON.stringify(payload) }),
-  listRecipients: (familyId: string) => request(`/notification-recipients/family/${familyId}`),
-  updateRecipient: (id: string, payload: Record<string, unknown>) =>
-    request(`/notification-recipients/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
-  deleteRecipient: (id: string) => request(`/notification-recipients/${id}`, { method: "DELETE" }),
   approveExtension: (id: string, minutes?: number, rest_of_day?: boolean) =>
     request(`/extension-requests/${id}/approve`, { method: "POST", body: JSON.stringify({ minutes, rest_of_day }) }),
   denyExtension: (id: string) => request(`/extension-requests/${id}/deny`, { method: "POST" }),

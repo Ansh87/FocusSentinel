@@ -109,26 +109,38 @@ railway run python ../../database/seed/seed.py
 
 `railway run` executes the command with that service's environment variables (including `DATABASE_URL`) injected, against your Railway Postgres instance.
 
-### 4.6 Turn on two-way SMS (students texting for time, parents replying YES/NO)
+### 4.6 Turn on real extension-request approval emails
 
-This is off by default (nobody can text in or get texted) until you add a
-real Twilio number. Everything server-side already exists — this is just
-wiring in credentials.
+When a student requests more time, every parent in the family gets an email
+with one-tap Approve/Deny links (see `GET /extension-requests/decide` in
+`services/api/app/routers/extension_requests.py`) — no phone number or SMS
+provider required. This is on by default in the sense that the links are
+always generated; what's off by default is actual *delivery*, since the
+`console` email provider just logs the email to the notification-worker's
+Railway logs instead of sending it.
 
-1. Create a Twilio account and buy a phone number with SMS capability (Twilio's free trial number works for testing).
-2. On the **notification-worker** service, add:
-   - `SMS_PROVIDER` = `twilio`
-   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` = from the Twilio console
-   - `TWILIO_FROM_NUMBER` = the number you bought, e.g. `+15551234567`
-3. On the **API** service, add:
-   - `TWILIO_FROM_NUMBER` = the same number (the API only uses this to show parents/students what number to text, via `GET /sms/status` — it never sends anything itself)
-   - `SMS_WEBHOOK_TOKEN` = a random string (`openssl rand -hex 16`) — this is checked on every inbound webhook call so a random POST to the endpoint can't fake a request or an approval
-4. In the Twilio console, open your number's configuration and set **"A message comes in"** to a webhook:
-   `https://<your-api-domain>/sms/inbound?token=<the SMS_WEBHOOK_TOKEN you just set>`, method `HTTP POST`.
-5. Redeploy both services so the new variables take effect.
-6. In the dashboard, edit a student and add their phone number — they can then text that Twilio number to request more time, and any parent with a mobile number + "sms" in their notification preferences can reply `YES <code>` / `NO <code>` to decide.
+1. On the **notification-worker** service, set `EMAIL_PROVIDER` to `smtp` or
+   `sendgrid` and add the matching credential variables (see
+   `services/notification-worker/app/config.py` for the full list — a Gmail
+   account with an "app password" works fine for `smtp`).
+2. On the **API** service, set `PUBLIC_API_BASE_URL` to this service's own
+   public domain from step 4.2 (e.g. `https://focussentinel-api-production.up.railway.app`).
+   The approve/deny links are built from this value, so they'll be broken
+   (pointing at `localhost:8000`) until it's set.
+3. Redeploy both services so the new variables take effect.
 
-Known limits: numbers are matched by string equality after light US-centric normalization (`app/phone.py`) — international numbers should be entered with their full `+<country code>` prefix to be safe. If more than one request is pending for the same phone, replies should include the 3-digit code from the text to avoid ambiguity; without a code, the most recent pending one is assumed.
+Known limits: the approve/deny link expires after 24 hours
+(`EXTENSION_ACTION_TOKEN_EXPIRE_MINUTES`, configurable) — after that, or
+once a request has already been decided any other way, clicking it just
+shows a friendly "already decided"/"expired" page instead of acting again.
+
+A previous version of this app had two-way SMS (students texting to request
+time, parents replying YES/NO by text). That was removed at the product
+owner's request — Twilio and similar providers require a dedicated,
+carrier-verified phone number and often a slow business-verification
+process, which turned out to be more friction than it was worth for this
+use case. The email approach above achieves the same "parent can act from
+their phone" goal without any of that.
 
 ### 4.7 Point the browser extension at production
 

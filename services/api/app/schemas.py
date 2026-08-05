@@ -106,22 +106,7 @@ class StudentOut(BaseModel):
     is_sibling_manager: bool = False
     sibling_manager_until: Optional[datetime] = None
     is_archived: bool = False
-    has_phone: bool = False
     model_config = {"from_attributes": True}
-
-
-class StudentPhoneIn(BaseModel):
-    phone_number: str = Field(min_length=7, max_length=20)
-
-
-class StudentPhoneOut(BaseModel):
-    has_phone: bool
-    phone_number: Optional[str] = None  # returned to the parent only, never elsewhere
-
-
-class SmsStatusOut(BaseModel):
-    enabled: bool
-    phone_number: Optional[str] = None
 
 
 class SiblingManagerGrantRequest(BaseModel):
