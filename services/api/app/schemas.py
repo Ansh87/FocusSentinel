@@ -333,11 +333,24 @@ class NotificationRecipientCreate(BaseModel):
 
 class NotificationRecipientOut(BaseModel):
     id: str
+    family_id: str
     name: str
     relationship: str
-    email: Optional[str]
+    email: Optional[str] = None
+    mobile_number: Optional[str] = None
+    preferred_channels: list[str] = Field(default_factory=lambda: ["email"])
+    severity_preference: str = "all"
     verified: bool
     model_config = {"from_attributes": True}
+
+
+class NotificationRecipientUpdate(BaseModel):
+    name: Optional[str] = None
+    relationship: Optional[str] = None
+    email: Optional[EmailStr] = None
+    mobile_number: Optional[str] = None
+    preferred_channels: Optional[list[str]] = None
+    severity_preference: Optional[Literal["all", "restriction_only", "daily_summary_only"]] = None
 
 
 class AuditLogOut(BaseModel):

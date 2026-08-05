@@ -89,6 +89,10 @@ export const api = {
     request("/devices/register", { method: "POST", body: JSON.stringify(payload) }),
   createRecipient: (payload: Record<string, unknown>) =>
     request("/notification-recipients", { method: "POST", body: JSON.stringify(payload) }),
+  listRecipients: (familyId: string) => request(`/notification-recipients/family/${familyId}`),
+  updateRecipient: (id: string, payload: Record<string, unknown>) =>
+    request(`/notification-recipients/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteRecipient: (id: string) => request(`/notification-recipients/${id}`, { method: "DELETE" }),
   approveExtension: (id: string, minutes?: number, rest_of_day?: boolean) =>
     request(`/extension-requests/${id}/approve`, { method: "POST", body: JSON.stringify({ minutes, rest_of_day }) }),
   denyExtension: (id: string) => request(`/extension-requests/${id}/deny`, { method: "POST" }),
